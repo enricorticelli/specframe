@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Local package artifacts
+*.tgz
+
+# Generated output from running specframe in this repository
+/AGENTS.md
+/CLAUDE.md
+/docs/
+/.github/copilot-instructions.md
+/.github/pull_request_template.md
+/.github/workflows/policy-check.yml
