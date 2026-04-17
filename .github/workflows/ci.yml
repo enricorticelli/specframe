@@ -22,9 +22,9 @@ jobs:
         shell: bash
         run: |
           TMP_DIR="$(mktemp -d)"
-          cd "$TMP_DIR"
+          node --input-type=module -e "import { writeTemplateSet } from '${GITHUB_WORKSPACE}/src/writer.js'; await writeTemplateSet({ targetDir: '${TMP_DIR}', projectName: 'ci-smoke', packageManager: 'npm', includeCI: true });"
 
-          printf '\n\nY\n' | node "$GITHUB_WORKSPACE/bin/specframe.js"
+          cd "$TMP_DIR"
 
           test -f AGENTS.md
           test -f CLAUDE.md
