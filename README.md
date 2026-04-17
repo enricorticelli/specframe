@@ -1,46 +1,71 @@
 # specframe
 
-CLI minimale per generare file di contesto (AGENTS/ADR) nella cartella corrente.
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
 
-## Requirements
+> Bootstrap a decision-driven, AI-ready repository in seconds.
 
-- Node.js 18+
+`specframe` is a zero-dependency CLI that scaffolds the minimum set of context files a modern repo needs to collaborate with AI coding agents (Claude, Copilot, Codex): ADRs, rules, guidelines, runbooks, a glossary, agent prompts, slash commands, and skills.
 
-## Run
+---
 
-Da questo repository:
-
-```bash
-node ./bin/specframe.js
-```
-
-or:
+## Install
 
 ```bash
-npm start
+npm install -g specframe
+# or, no install:
+npx specframe
 ```
 
-La CLI chiede:
+## Usage
 
-- `project name` (default: nome cartella corrente)
-- `package manager` (`npm` o `pnpm`, default `npm`)
-- `include CI` (`[Y/n]`)
+From the root of a new or existing repository:
 
-## Generated files
+```bash
+specframe
+```
 
-Scrive questi file nella cartella corrente:
+You will be prompted for five choices:
 
-- AGENTS.md
-- CLAUDE.md
-- docs/adr/README.md
-- docs/adr/0000-template.md
-- .github/copilot-instructions.md
-- .github/pull_request_template.md
-- optional: .github/workflows/policy-check.yml
+| Prompt | Options | Default |
+| --- | --- | --- |
+| Project name | free text | current folder name |
+| Package manager | `npm` \| `pnpm` | `npm` |
+| Content profile | `empty` \| `universal` | `empty` |
+| Agent assistants | csv of `claude`,`copilot`,`codex` \| `none` | `none` |
 
-Se un file esiste gia, non viene sovrascritto.
+- **`empty`** writes skeletons only — README indexes and a `0000-template.md` per section.
+- **`universal`** pre-populates `docs/rules/` and `docs/guidelines/` with an opinionated baseline (Clean Code, SOLID, testing, security, logging, Git/PR conventions). Edit or remove freely.
 
-## Logs
+Existing files are never overwritten — `specframe` is idempotent and safe to re-run.
 
-- `[write] <path>`: file created
-- `[skip] <path>`: file already exists, skipped
+## What gets scaffolded
+
+```
+AGENTS.md                          # canonical contract for AI agents
+CLAUDE.md                          # Claude-specific addendum
+.github/
+  copilot-instructions.md
+  pull_request_template.md
+docs/
+  adr/         README + 0000-template
+  rules/       README + 0000-template     (non-negotiable constraints)
+  guidelines/  README + 0000-template     (conventions & patterns)
+  runbook/     README + 0000-template     (operational procedures)
+  glossary/    README                      (domain terms)
+```
+
+When agent assistants are selected, `specframe` also scaffolds subagents, slash commands and skills in the correct path for each tool:
+
+| Artifact | Claude | Copilot | Codex |
+| --- | --- | --- | --- |
+| Subagents | `.claude/agents/` | `.github/chatmodes/` | `.codex/agents/` |
+| Slash commands | `.claude/commands/` | `.github/prompts/` | `.codex/prompts/` |
+| Skills | `.claude/skills/` | — | — |
+
+**Subagents**: `explorer`, `planner`, `reviewer`.
+**Slash commands**: `/specframe-specify`, `/specframe-plan`, `/specframe-review`, `/specframe-bootstrap`.
+**Skills** (Claude only, auto-triggered): `specframe-adr-draft`, `specframe-rule-check`, `specframe-doc-sync`.
+
+## License
+
+MIT

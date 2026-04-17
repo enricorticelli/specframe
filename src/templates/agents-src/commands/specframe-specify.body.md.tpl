@@ -1,4 +1,4 @@
-# /specify
+# /specframe-specify
 
 Draft a short specification from a request or idea.
 

@@ -1,10 +1,10 @@
-# /plan
+# /specframe-plan
 
 Produce an implementation plan from a spec.
 
 ## Input
 
-A specification (from /specify) or a described task.
+A specification (from /specframe-specify) or a described task.
 
 ## Before planning
 
