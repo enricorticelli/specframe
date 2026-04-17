@@ -18,6 +18,16 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Verify npm authentication
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN is missing. Add it in GitHub repo settings: Secrets and variables > Actions."
+            exit 1
+          fi
+          npm whoami
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish package
         run: npm publish --access public
         env:

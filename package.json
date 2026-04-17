@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "specframe": "./bin/specframe.js"
+    "specframe": "bin/specframe.js"
   },
   "scripts": {
     "start": "node ./bin/specframe.js"
