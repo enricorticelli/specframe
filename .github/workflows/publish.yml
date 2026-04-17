@@ -39,8 +39,13 @@ jobs:
             echo "Tag version '$TAG_VERSION' is not a valid semver-like version."
             exit 1
           fi
-          npm version "$TAG_VERSION" --no-git-tag-version
-          echo "Using version $TAG_VERSION from tag $GITHUB_REF_NAME"
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if [ "$CURRENT_VERSION" = "$TAG_VERSION" ]; then
+            echo "package.json already at $TAG_VERSION, nothing to change."
+          else
+            npm version "$TAG_VERSION" --no-git-tag-version
+            echo "Updated package.json from $CURRENT_VERSION to $TAG_VERSION (from tag $GITHUB_REF_NAME)."
+          fi
 
       - name: Sync package.json version on main
         if: startsWith(github.ref, 'refs/tags/')
