@@ -5,13 +5,19 @@ import { writeTemplateSet } from './writer.js';
 
 export async function run() {
   const targetDir = process.cwd();
-  const { projectName, packageManager, includeCI } = await askQuestions();
+  const {
+    projectName,
+    packageManager,
+    contentProfile,
+    agentTargets,
+  } = await askQuestions();
 
   await writeTemplateSet({
     targetDir,
     projectName,
     packageManager,
-    includeCI,
+    contentProfile,
+    agentTargets,
   });
 
   console.log(`Done. Context files are ready in: ${targetDir}`);
