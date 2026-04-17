@@ -60,12 +60,15 @@ const AGENT_TEMPLATES = {
     { name: 'reviewer', description: 'Review diffs against ADRs/rules/guidelines.' },
   ],
   commands: [
-    { name: 'specify', description: 'Draft a spec from a request.' },
-    { name: 'plan', description: 'Produce an implementation plan from a spec.' },
-    { name: 'review', description: 'Review current changes against ADRs/rules/guidelines.' },
+    { name: 'specframe-specify', description: 'Draft a spec from a request.' },
+    { name: 'specframe-plan', description: 'Produce an implementation plan from a spec.' },
+    { name: 'specframe-review', description: 'Review current changes against ADRs/rules/guidelines.' },
+    { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
   ],
   skills: [
-    { name: 'example', description: 'Starter skill template.' },
+    { name: 'specframe-adr-draft', description: 'Auto-trigger when an architectural decision is being made: draft a new ADR.' },
+    { name: 'specframe-rule-check', description: 'Auto-trigger on diff/PR review: verify compliance with enforced rules.' },
+    { name: 'specframe-doc-sync', description: 'Auto-trigger when a new convention, term, or procedure emerges without a matching doc.' },
   ],
 };
 

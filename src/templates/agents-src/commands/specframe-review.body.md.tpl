@@ -1,4 +1,4 @@
-# /review
+# /specframe-review
 
 Review current changes against ADRs, rules, and guidelines.
 
