@@ -30,7 +30,11 @@ Read the current scaffolds to see which sections are still empty:
 
 5. **Extract runbooks** from operational scripts (deploy, CI jobs, Makefile targets, rotations). One runbook per procedure in `docs/runbook/NNNN-<slug>.md`.
 
-6. **Extract glossary terms** — core domain entities from models/types, acronyms, business-specific terms. Append to `docs/glossary/README.md`.
+6. **Extract glossary terms** — core domain entities from models/types, acronyms, business-specific terms.
+   - Group related terms by domain area (e.g. auth, billing, catalog). Create one `docs/glossary/NNNN-<slug>.md` per group using the `docs/glossary/0000-template.md` structure (Definition, Aliases, Context, Related, Source).
+   - Put each term in a `## Term` section. Write a precise 1–2 sentence definition and cite a `path:line` source for every term.
+   - In `docs/glossary/README.md`, add a one-line index entry linking to each group file. Do not dump all definitions into the README.
+   - Only when a single ungrouped term emerges may you append it directly to the README index.
 
 ## Rules
 

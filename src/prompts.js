@@ -62,8 +62,8 @@ export async function askQuestions() {
     console.log('\n# Agent assistants');
     console.log('Scaffolds subagents, slash commands and a starter skill for the selected tools:');
     console.log('  - claude  → .claude/agents, .claude/commands, .claude/skills');
-    console.log('  - copilot → .github/chatmodes, .github/prompts');
-    console.log('  - codex   → .codex/agents, .codex/prompts');
+    console.log('  - copilot → .github/agents, .github/prompts');
+    console.log('  - codex   → .codex/agents (TOML), .agents/skills');
     console.log('Comma-separate multiple targets. Use "none" to skip.');
     const agentTargetsInput = await rl.question(
       '> Agent assistants [claude,copilot,codex|none] (default: none): ',
