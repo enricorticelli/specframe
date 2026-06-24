@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,16 +69,6 @@ jobs:
           git push origin HEAD:main
           echo "package.json on main aligned to $TAG_VERSION"
 
-      - name: Verify npm authentication
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN is missing. Add it in GitHub repo settings: Secrets and variables > Actions."
-            exit 1
-          fi
-          npm whoami
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
       - name: Check if version already exists on npm
         id: version_check
         run: |
@@ -95,9 +86,7 @@ jobs:
 
       - name: Publish package
         if: steps.version_check.outputs.exists != 'true'
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
 
       - name: Publish summary
         if: always()
