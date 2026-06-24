@@ -47,24 +47,26 @@ CLAUDE.md                          # Claude-specific addendum
   copilot-instructions.md
   pull_request_template.md
 docs/
-  adr/         README + 0000-template
+  adr/         README + 0000-template     (architecture decisions)
   rules/       README + 0000-template     (non-negotiable constraints)
   guidelines/  README + 0000-template     (conventions & patterns)
   runbook/     README + 0000-template     (operational procedures)
-  glossary/    README                      (domain terms)
+  glossary/    README + 0000-template     (domain terms, grouped by area)
 ```
 
 When agent assistants are selected, `specframe` also scaffolds subagents, slash commands and skills in the correct path for each tool:
 
 | Artifact | Claude | Copilot | Codex |
 | --- | --- | --- | --- |
-| Subagents | `.claude/agents/` | `.github/chatmodes/` | `.codex/agents/` |
-| Slash commands | `.claude/commands/` | `.github/prompts/` | `.codex/prompts/` |
-| Skills | `.claude/skills/` | — | — |
+| Subagents | `.claude/agents/*.md` | `.github/agents/*.agent.md` | `.codex/agents/*.toml` |
+| Slash commands | `.claude/commands/*.md` | `.github/prompts/*.prompt.md` | `.agents/skills/` |
+| Skills | `.claude/skills/*/SKILL.md` | — | `.agents/skills/*/SKILL.md` |
 
 **Subagents**: `explorer`, `planner`, `reviewer`.
 **Slash commands**: `/specframe-specify`, `/specframe-plan`, `/specframe-review`, `/specframe-bootstrap`.
-**Skills** (Claude only, auto-triggered): `specframe-adr-draft`, `specframe-rule-check`, `specframe-doc-sync`.
+**Skills** (auto-triggered): `specframe-adr-draft`, `specframe-rule-check`, `specframe-doc-sync`.
+
+Paths follow each tool's current convention: Copilot custom agents (`.agent.md`) and prompt files; Codex subagents as TOML and reusable instructions as Agent Skills under `.agents/skills/`. Codex has no project-level prompt files, so its slash-command equivalents are scaffolded as skills.
 
 ## License
 
