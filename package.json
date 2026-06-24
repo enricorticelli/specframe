@@ -8,5 +8,9 @@
   "scripts": {
     "start": "node ./bin/specframe.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/enricorticelli/specframe.git"
+  },
   "license": "MIT"
 }
