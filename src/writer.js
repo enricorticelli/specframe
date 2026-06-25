@@ -2,6 +2,9 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { manifestFromPlan, readManifest, sha256, writeManifest } from './manifest.js';
+import { planUpdateActions } from './update.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const templateDir = path.join(__dirname, 'templates');
@@ -132,7 +135,9 @@ async function resolveContentTemplatePath(templateFile, contentProfile) {
   return path.join(templateDir, 'content', 'empty', templateFile);
 }
 
-async function writeAgentSet({ targetDir, targets, vars }) {
+async function buildAgentEntries({ targets, vars }) {
+  const entries = [];
+
   for (const target of targets) {
     const adapter = AGENT_ADAPTERS[target];
     if (!adapter) continue;
@@ -141,16 +146,14 @@ async function writeAgentSet({ targetDir, targets, vars }) {
       const bodyPath = path.join(templateDir, 'agents-src', 'agents', `${entry.name}.body.md.tpl`);
       const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
       const content = adapter.renderAgent({ name: entry.name, description: entry.description, body });
-      const targetPath = path.join(targetDir, adapter.agentPath(entry.name));
-      await writeIfMissing(targetPath, content, targetDir);
+      entries.push({ relpath: adapter.agentPath(entry.name), content, managed: true });
     }
 
     for (const entry of AGENT_TEMPLATES.commands) {
       const bodyPath = path.join(templateDir, 'agents-src', 'commands', `${entry.name}.body.md.tpl`);
       const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
       const content = adapter.renderCommand({ name: entry.name, description: entry.description, body });
-      const targetPath = path.join(targetDir, adapter.commandPath(entry.name));
-      await writeIfMissing(targetPath, content, targetDir);
+      entries.push({ relpath: adapter.commandPath(entry.name), content, managed: true });
     }
 
     if (adapter.skillPath) {
@@ -158,11 +161,47 @@ async function writeAgentSet({ targetDir, targets, vars }) {
         const bodyPath = path.join(templateDir, 'agents-src', 'skills', `${entry.name}.body.md.tpl`);
         const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
         const content = adapter.renderSkill({ name: entry.name, description: entry.description, body });
-        const targetPath = path.join(targetDir, adapter.skillPath(entry.name));
-        await writeIfMissing(targetPath, content, targetDir);
+        entries.push({ relpath: adapter.skillPath(entry.name), content, managed: true });
       }
     }
   }
+
+  return entries;
+}
+
+// Render the full set of files this specframe version produces for the given
+// choices. Returns { relpath, content, managed } with forward-slash relpaths
+// (the manifest key form). Shared by `init` and `update`.
+export async function buildTemplatePlan({
+  projectName,
+  packageManager,
+  contentProfile = 'empty',
+  agentTargets = [],
+}) {
+  const vars = { projectName, packageManager };
+  const plan = [];
+
+  for (const item of TEMPLATE_TARGETS) {
+    const templateText = await readFile(path.join(templateDir, item.template), 'utf8');
+    plan.push({ relpath: item.target, content: renderTemplate(templateText, vars), managed: false });
+  }
+
+  for (const item of CONTENT_TARGETS) {
+    const templatePath = await resolveContentTemplatePath(item.template, contentProfile);
+    const templateText = await readFile(templatePath, 'utf8');
+    plan.push({ relpath: item.target, content: renderTemplate(templateText, vars), managed: false });
+  }
+
+  if (agentTargets.length > 0) {
+    plan.push(...(await buildAgentEntries({ targets: agentTargets, vars })));
+  }
+
+  return plan;
+}
+
+// Absolute path for a forward-slash manifest-key relpath on the host OS.
+function toAbsPath(targetDir, relpath) {
+  return path.join(targetDir, ...relpath.split('/'));
 }
 
 export async function writeTemplateSet({
@@ -171,30 +210,90 @@ export async function writeTemplateSet({
   packageManager,
   contentProfile = 'empty',
   agentTargets = [],
+  version,
 }) {
-  const vars = { projectName, packageManager };
+  const config = { projectName, packageManager, contentProfile, agentTargets };
+  const plan = await buildTemplatePlan(config);
 
-  for (const item of TEMPLATE_TARGETS) {
-    const templatePath = path.join(templateDir, item.template);
-    const targetPath = path.join(targetDir, item.target);
-
-    const templateText = await readFile(templatePath, 'utf8');
-    const rendered = renderTemplate(templateText, vars);
-
-    await writeIfMissing(targetPath, rendered, targetDir);
+  for (const entry of plan) {
+    await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir);
   }
 
-  for (const item of CONTENT_TARGETS) {
-    const templatePath = await resolveContentTemplatePath(item.template, contentProfile);
-    const targetPath = path.join(targetDir, item.target);
+  await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+}
 
-    const templateText = await readFile(templatePath, 'utf8');
-    const rendered = renderTemplate(templateText, vars);
+// Hash whatever each planned file currently holds on disk; a missing file is
+// simply absent from the returned map.
+async function hashDiskFiles(targetDir, plan) {
+  const diskHashes = {};
+  for (const { relpath } of plan) {
+    try {
+      diskHashes[relpath] = sha256(await readFile(toAbsPath(targetDir, relpath), 'utf8'));
+    } catch {
+      // not on disk — leave it out so it is treated as "create".
+    }
+  }
+  return diskHashes;
+}
 
-    await writeIfMissing(targetPath, rendered, targetDir);
+// Reconcile an already-scaffolded repo with this version of specframe. Managed
+// artifacts are refreshed when untouched; user-edited managed files get a
+// `.specframe-new` sibling; user-owned files are never written. Returns the
+// list of actions taken so the CLI can report them.
+export async function updateTemplateSet({
+  targetDir,
+  projectName,
+  packageManager,
+  contentProfile = 'empty',
+  agentTargets = [],
+  version,
+  force = false,
+  dryRun = false,
+}) {
+  const config = { projectName, packageManager, contentProfile, agentTargets };
+  const plan = await buildTemplatePlan(config);
+  const manifest = await readManifest(targetDir);
+  const diskHashes = await hashDiskFiles(targetDir, plan);
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes, force });
+
+  for (const action of actions) {
+    const rel = action.relpath;
+    if (!dryRun) {
+      if (action.action === 'create' || action.action === 'overwrite') {
+        const absPath = toAbsPath(targetDir, rel);
+        await mkdir(path.dirname(absPath), { recursive: true });
+        await writeFile(absPath, action.content, 'utf8');
+      } else if (action.action === 'conflict') {
+        await writeFile(`${toAbsPath(targetDir, rel)}.specframe-new`, action.content, 'utf8');
+      }
+    }
+    reportAction(action, dryRun);
   }
 
-  if (agentTargets.length > 0) {
-    await writeAgentSet({ targetDir, targets: agentTargets, vars });
+  if (!dryRun) {
+    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
   }
+
+  return actions;
+}
+
+const ACTION_LABEL = {
+  create: 'write',
+  overwrite: 'update',
+  'up-to-date': 'ok',
+  conflict: 'conflict',
+  'skip-user': 'keep',
+  orphan: 'orphan',
+};
+
+function reportAction(action, dryRun) {
+  if (action.action === 'up-to-date') return; // nothing changed; stay quiet
+  const prefix = dryRun ? '[dry-run] ' : '';
+  const label = ACTION_LABEL[action.action] ?? action.action;
+  let suffix = '';
+  if (action.action === 'conflict') suffix = ` → wrote ${action.relpath}.specframe-new (yours kept)`;
+  if (action.action === 'skip-user') suffix = ' (your file, untouched)';
+  if (action.action === 'orphan') suffix = ' (no longer generated — remove if unused)';
+  console.log(`${prefix}[${label}] ${action.relpath}${suffix}`);
 }

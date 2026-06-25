@@ -38,6 +38,35 @@ You will be prompted for five choices:
 
 Existing files are never overwritten — `specframe` is idempotent and safe to re-run.
 
+`init` records what it generated in `.specframe/manifest.json` (a content hash per file plus your choices), which is what makes `specframe update` possible later.
+
+## Updating
+
+When you upgrade specframe and want a repo you scaffolded months ago to pick up the new agent prompts, commands and skills:
+
+```bash
+npm install -g specframe@latest   # or: npx specframe@latest update
+specframe update
+```
+
+`update` reads the choices saved in `.specframe/manifest.json`, so it never re-prompts. It treats files in two ways:
+
+| File kind | Examples | On update |
+| --- | --- | --- |
+| **Yours** | `docs/**`, ADRs, `CLAUDE.md`, `AGENTS.md`, PR template | **Never overwritten.** Your months of work are safe. |
+| **Managed** (specframe's artifacts) | `.claude/**`, `.github/agents/**`, `.github/prompts/**`, `.codex/**`, `.agents/skills/**` | Refreshed **only if you didn't edit them** since they were generated. |
+
+If you *did* hand-edit a managed file, update won't clobber it: the new version is written next to it as `<file>.specframe-new` so you can diff and merge. Managed files specframe no longer generates are reported as orphans (not deleted).
+
+Options:
+
+| Flag | Effect |
+| --- | --- |
+| `-n`, `--dry-run` | Show what would change without writing anything. |
+| `-f`, `--force` | Overwrite managed files even if you edited them (no `.specframe-new`). |
+
+Repos scaffolded before update tracking existed have no manifest; `update` falls back to asking your choices once and behaves conservatively (writes `.specframe-new` rather than overwriting).
+
 ## What gets scaffolded
 
 ```
