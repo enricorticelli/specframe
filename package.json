@@ -1,12 +1,13 @@
 {
   "name": "specframe",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "type": "module",
   "bin": {
     "specframe": "bin/specframe.js"
   },
   "scripts": {
-    "start": "node ./bin/specframe.js"
+    "start": "node ./bin/specframe.js",
+    "test": "node --test"
   },
   "repository": {
     "type": "git",

@@ -1,7 +1,16 @@
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
-const VALID_AGENT_TARGETS = new Set(['claude', 'copilot', 'codex']);
+// Triad agents get full subagents/commands/skills; rules agents get a single
+// native rules file that points back at AGENTS.md + docs/.
+const VALID_AGENT_TARGETS = new Set([
+  'claude',
+  'copilot',
+  'codex',
+  'gemini',
+  'continue',
+  'amazonq',
+]);
 
 function getCurrentRepoName() {
   const parts = process.cwd().split(/[\\/]+/).filter(Boolean);
@@ -18,7 +27,7 @@ function parseContentProfile(value) {
   return normalized === 'universal' ? 'universal' : 'empty';
 }
 
-function parseAgentTargets(value) {
+export function parseAgentTargets(value) {
   const normalized = (value || '').trim().toLowerCase();
   if (!normalized || normalized === 'none') return [];
   return normalized
@@ -60,13 +69,19 @@ export async function askQuestions() {
     );
 
     console.log('\n# Agent assistants');
-    console.log('Scaffolds subagents, slash commands and a starter skill for the selected tools:');
+    console.log('Tailors files for the AI agents you use. AGENTS.md (always generated) already');
+    console.log('covers most tools; these add each tool\'s native files on top.');
+    console.log('Full subagents + slash commands + skills:');
     console.log('  - claude  → .claude/agents, .claude/commands, .claude/skills');
     console.log('  - copilot → .github/agents, .github/prompts');
     console.log('  - codex   → .codex/agents (TOML), .agents/skills');
+    console.log('Native rules file (for tools that do not read AGENTS.md on their own):');
+    console.log('  - gemini   → GEMINI.md');
+    console.log('  - continue → .continue/rules/specframe.md');
+    console.log('  - amazonq  → .amazonq/rules/specframe.md');
     console.log('Comma-separate multiple targets. Use "none" to skip.');
     const agentTargetsInput = await rl.question(
-      '> Agent assistants [claude,copilot,codex|none] (default: none): ',
+      '> Agent assistants [claude,copilot,codex,gemini,continue,amazonq|none] (default: none): ',
     );
 
     return {
