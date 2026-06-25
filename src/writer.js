@@ -80,6 +80,36 @@ const AGENT_ADAPTERS = {
   },
 };
 
+// Rules adapters cover agents that read a single native rules/instructions file
+// rather than the subagent/command/skill triad. Each renders one thin pointer
+// back to AGENTS.md + docs/ from a shared body.
+// - managed:false → the tool's primary context file the user is expected to own
+//   and extend (like CLAUDE.md). Never overwritten on update.
+// - managed:true  → a specframe-namespaced rule inside the tool's rules dir,
+//   refreshed on update (with the usual .specframe-new safety net).
+const RULES_ADAPTERS = {
+  gemini: {
+    path: 'GEMINI.md',
+    managed: false,
+    render: ({ body }) => body,
+  },
+  continue: {
+    path: '.continue/rules/specframe.md',
+    managed: true,
+    render: ({ body }) =>
+      '---\n' +
+      'name: specframe context\n' +
+      'description: Canonical AI-agent context for this repository.\n' +
+      'alwaysApply: true\n' +
+      `---\n\n${body}`,
+  },
+  amazonq: {
+    path: '.amazonq/rules/specframe.md',
+    managed: true,
+    render: ({ body }) => body,
+  },
+};
+
 const AGENT_TEMPLATES = {
   agents: [
     { name: 'explorer', description: 'Explore the codebase to answer questions. Read-only.' },
@@ -169,6 +199,29 @@ async function buildAgentEntries({ targets, vars }) {
   return entries;
 }
 
+async function buildRulesEntries({ targets, vars }) {
+  const entries = [];
+  let body;
+
+  for (const target of targets) {
+    const adapter = RULES_ADAPTERS[target];
+    if (!adapter) continue;
+
+    if (body === undefined) {
+      const bodyPath = path.join(templateDir, 'rules-src', 'specframe-rules.body.md.tpl');
+      body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+    }
+
+    entries.push({
+      relpath: adapter.path,
+      content: adapter.render({ body }),
+      managed: adapter.managed,
+    });
+  }
+
+  return entries;
+}
+
 // Render the full set of files this specframe version produces for the given
 // choices. Returns { relpath, content, managed } with forward-slash relpaths
 // (the manifest key form). Shared by `init` and `update`.
@@ -194,6 +247,7 @@ export async function buildTemplatePlan({
 
   if (agentTargets.length > 0) {
     plan.push(...(await buildAgentEntries({ targets: agentTargets, vars })));
+    plan.push(...(await buildRulesEntries({ targets: agentTargets, vars })));
   }
 
   return plan;

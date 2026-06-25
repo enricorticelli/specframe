@@ -31,7 +31,7 @@ You will be prompted for five choices:
 | Project name | free text | current folder name |
 | Package manager | `npm` \| `pnpm` | `npm` |
 | Content profile | `empty` \| `universal` | `empty` |
-| Agent assistants | csv of `claude`,`copilot`,`codex` \| `none` | `none` |
+| Agent assistants | csv of `claude`,`copilot`,`codex`,`gemini`,`continue`,`amazonq` \| `none` | `none` |
 
 - **`empty`** writes skeletons only — README indexes and a `0000-template.md` per section.
 - **`universal`** pre-populates `docs/rules/` and `docs/guidelines/` with an opinionated baseline (Clean Code, SOLID, testing, security, logging, Git/PR conventions). Edit or remove freely.
@@ -53,8 +53,8 @@ specframe update
 
 | File kind | Examples | On update |
 | --- | --- | --- |
-| **Yours** | `docs/**`, ADRs, `CLAUDE.md`, `AGENTS.md`, PR template | **Never overwritten.** Your months of work are safe. |
-| **Managed** (specframe's artifacts) | `.claude/**`, `.github/agents/**`, `.github/prompts/**`, `.codex/**`, `.agents/skills/**` | Refreshed **only if you didn't edit them** since they were generated. |
+| **Yours** | `docs/**`, ADRs, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, PR template | **Never overwritten.** Your months of work are safe. |
+| **Managed** (specframe's artifacts) | `.claude/**`, `.github/agents/**`, `.github/prompts/**`, `.codex/**`, `.agents/skills/**`, `.continue/rules/specframe.md`, `.amazonq/rules/specframe.md` | Refreshed **only if you didn't edit them** since they were generated. |
 
 If you *did* hand-edit a managed file, update won't clobber it: the new version is written next to it as `<file>.specframe-new` so you can diff and merge. Managed files specframe no longer generates are reported as orphans (not deleted).
 
@@ -96,6 +96,18 @@ When agent assistants are selected, `specframe` also scaffolds subagents, slash 
 **Skills** (auto-triggered): `specframe-adr-draft`, `specframe-rule-check`, `specframe-doc-sync`.
 
 Paths follow each tool's current convention: Copilot custom agents (`.agent.md`) and prompt files; Codex subagents as TOML and reusable instructions as Agent Skills under `.agents/skills/`. Codex has no project-level prompt files, so its slash-command equivalents are scaffolded as skills.
+
+### Other agents (native rules files)
+
+`AGENTS.md` (always generated) is the cross-tool standard and is read natively by most agents — Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Codex, Jules and others need nothing extra. For the agents that do **not** read `AGENTS.md` on their own, select them to also drop their native rules file — a thin pointer back to `AGENTS.md` + `docs/`:
+
+| Target | File | Owner on update |
+| --- | --- | --- |
+| `gemini` | `GEMINI.md` | yours (starter you extend) |
+| `continue` | `.continue/rules/specframe.md` (always-apply) | managed |
+| `amazonq` | `.amazonq/rules/specframe.md` | managed |
+
+These carry no project-specific content of their own: they point every agent at the same canonical `AGENTS.md` and `docs/`, so there is a single source of truth to maintain.
 
 ## License
 
