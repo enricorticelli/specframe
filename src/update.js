@@ -58,3 +58,30 @@ export function planUpdateActions({ plan, manifest, diskHashes = {}, force = fal
 
   return actions;
 }
+
+// Decide, per file recorded in the manifest, what `specframe uninstall` should
+// do — pure and fs-free so it can be tested in isolation.
+//
+// Inputs:
+//   manifest   The manifest written by a previous run (must not be null).
+//   purge      When true, remove every file specframe created, including
+//              user-owned starters (CLAUDE.md, docs/**, …). When false (the
+//              default), only specframe-managed files are removed; user-owned
+//              files are reported as kept so the user can review them.
+//
+// Output: Array<{ relpath, managed, action }> where action is one of
+//   remove | keep
+export function planUninstallActions({ manifest, purge = false }) {
+  if (!manifest?.files) return [];
+
+  const actions = [];
+  for (const [relpath, info] of Object.entries(manifest.files)) {
+    const managed = info.managed === true;
+    if (managed || purge) {
+      actions.push({ relpath, managed, action: 'remove' });
+    } else {
+      actions.push({ relpath, managed, action: 'keep' });
+    }
+  }
+  return actions;
+}

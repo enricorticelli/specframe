@@ -1,9 +1,9 @@
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { manifestFromPlan, readManifest, sha256, writeManifest } from './manifest.js';
-import { planUpdateActions } from './update.js';
+import { manifestFromPlan, readManifest, sha256, writeManifest, MANIFEST_RELPATH } from './manifest.js';
+import { planUpdateActions, planUninstallActions } from './update.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -350,4 +350,66 @@ function reportAction(action, dryRun) {
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
   if (action.action === 'orphan') suffix = ' (no longer generated — remove if unused)';
   console.log(`${prefix}[${label}] ${action.relpath}${suffix}`);
+}
+
+// Remove specframe-managed artifacts from a repository, leaving it as if
+// specframe had never run. By default only specframe-owned (managed) files are
+// deleted; user-owned starters (CLAUDE.md, docs/**, …) are reported as kept so
+// the user can review them — pass `purge: true` to remove those too. The
+// manifest itself is always removed at the end. Empty directories left behind
+// are pruned up to (but not including) targetDir. Returns the list of actions.
+export async function uninstallTemplateSet({ targetDir, purge = false, dryRun = false }) {
+  const manifest = await readManifest(targetDir);
+  if (!manifest) {
+    throw new Error(
+      `No ${MANIFEST_RELPATH} found in ${targetDir}.\n` +
+        'Nothing to uninstall — run `specframe init` first.',
+    );
+  }
+
+  const actions = planUninstallActions({ manifest, purge });
+
+  for (const action of actions) {
+    if (action.action === 'remove') {
+      const absPath = toAbsPath(targetDir, action.relpath);
+      if (!dryRun) {
+        await rm(absPath, { force: true });
+        await pruneEmptyDirs(path.dirname(absPath), targetDir);
+      }
+      console.log(`${dryRun ? '[dry-run] ' : ''}[remove] ${action.relpath}`);
+    } else {
+      console.log(`${dryRun ? '[dry-run] ' : ''}[keep] ${action.relpath} (user-owned — use --purge to remove)`);
+    }
+  }
+
+  if (!dryRun) {
+    const manifestPath = path.join(targetDir, MANIFEST_RELPATH);
+    await rm(manifestPath, { force: true });
+    await pruneEmptyDirs(path.dirname(manifestPath), targetDir);
+    console.log(`[remove] ${MANIFEST_RELPATH}`);
+  } else {
+    console.log(`[dry-run] [remove] ${MANIFEST_RELPATH}`);
+  }
+
+  console.log(dryRun ? '\nDry run complete. Nothing was removed.' : '\nUninstall complete.');
+  return actions;
+}
+
+// Walk up from `startDir` removing empty directories, stopping at (and never
+// removing) `rootDir`. Used to clean up scaffolding dirs like `.claude/agents/`
+// once the last file inside them is gone.
+async function pruneEmptyDirs(startDir, rootDir) {
+  const root = path.resolve(rootDir);
+  let dir = path.resolve(startDir);
+  while (dir !== root && dir.startsWith(root + path.sep)) {
+    let entries;
+    try {
+      entries = await readdir(dir);
+    } catch {
+      break; // gone already
+    }
+    if (entries.length > 0) break; // not empty — leave it
+    await rm(dir, { recursive: true, force: true });
+    dir = path.dirname(dir);
+  }
 }
