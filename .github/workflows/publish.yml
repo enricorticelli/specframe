@@ -32,11 +32,19 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      # Node 22 ships with npm 10.x, which supports --provenance. We deliberately
-      # do NOT run `npm install -g npm@latest` here: the global self-upgrade is
-      # known to leave the bundled npm in a broken state where `sigstore` (a
-      # dependency of libnpmpublish used for provenance) goes missing, causing
-      # "Cannot find module 'sigstore'" during `npm publish --provenance`.
+      # npm Trusted Publishing (tokenless via OIDC) requires a recent npm CLI:
+      # the npm bundled with Node 22 signs provenance fine, but does NOT perform
+      # the OIDC→npm-token exchange used to authenticate the actual publish PUT,
+      # so the PUT fails with `404 Not Found` (npm hides package existence from
+      # unauthenticated callers). `npm install -g npm@latest` adds that exchange.
+      #
+      # Side effect: the self-upgrade drops `sigstore` from npm's bundled deps,
+      # which then breaks provenance signing with "Cannot find module 'sigstore'".
+      # Restore it explicitly so `--provenance` can sign the attestation.
+      - name: Use latest npm for tokenless trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm install -g sigstore
 
       - name: Set package version from tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -93,8 +101,6 @@ jobs:
       - name: Publish package
         if: steps.version_check.outputs.exists != 'true'
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish summary
         if: always()
