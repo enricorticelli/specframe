@@ -93,6 +93,8 @@ jobs:
       - name: Publish package
         if: steps.version_check.outputs.exists != 'true'
         run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish summary
         if: always()
