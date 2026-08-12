@@ -47,8 +47,8 @@ const AGENT_ADAPTERS = {
     agentPath: (name) => `.claude/agents/${name}.md`,
     commandPath: (name) => `.claude/commands/${name}.md`,
     skillPath: (name) => `.claude/skills/${name}/SKILL.md`,
-    renderAgent: ({ name, description, body }) =>
-      `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`,
+    renderAgent: ({ name, description, body, model }) =>
+      `---\nname: ${name}\ndescription: ${description}\n${model ? `model: ${model}\n` : ''}---\n\n${body}`,
     renderCommand: ({ description, body }) =>
       `---\ndescription: ${description}\n---\n\n${body}`,
     renderSkill: ({ name, description, body }) =>
@@ -115,6 +115,10 @@ const AGENT_TEMPLATES = {
     { name: 'explorer', description: 'Explore the codebase to answer questions. Read-only.' },
     { name: 'planner', description: 'Produce implementation plans. Reads ADRs/rules/guidelines first.' },
     { name: 'reviewer', description: 'Review diffs against ADRs/rules/guidelines.' },
+    { name: 'bootstrapper', description: 'Populate ADR/rules/guidelines/runbook/glossary docs by analyzing an existing codebase.' },
+    // model is only rendered by the claude adapter today (see AGENT_ADAPTERS.claude.renderAgent);
+    // copilot/codex ignore the extra field safely since their renderAgent doesn't destructure it.
+    { name: 'doc-writer', description: 'Render a decided doc entry (ADR, rule, guideline, runbook, or glossary term) into its template file. Mechanical only — does not decide content.', model: 'haiku' },
   ],
   commands: [
     { name: 'specframe-specify', description: 'Draft a spec from a request.' },
@@ -175,7 +179,7 @@ async function buildAgentEntries({ targets, vars }) {
     for (const entry of AGENT_TEMPLATES.agents) {
       const bodyPath = path.join(templateDir, 'agents-src', 'agents', `${entry.name}.body.md.tpl`);
       const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
-      const content = adapter.renderAgent({ name: entry.name, description: entry.description, body });
+      const content = adapter.renderAgent({ name: entry.name, description: entry.description, body, model: entry.model });
       entries.push({ relpath: adapter.agentPath(entry.name), content, managed: true });
     }
 

@@ -6,17 +6,12 @@ Review current changes against ADRs, rules, and guidelines.
 
 A diff, branch, or set of staged changes.
 
-## Checks
+## What it does
 
-- Alignment with docs/adr/.
-- Compliance with docs/rules/ (all enforced rules).
-- Adherence to docs/guidelines/ (active).
-- Tests added for new behavior or bug fixes.
-- No secrets, PII, or credentials.
-- Error handling at boundaries.
+Runs the same checklist as the `reviewer` agent, inline in this conversation rather than delegated, so you stay in the loop to follow up on individual findings. The canonical checklist and output format live in the `reviewer` agent definition — do not duplicate them here, follow that definition directly.
 
-## Output
+If a rule-compliance skill is available, it should auto-trigger before the output is finalized to verify every enforced rule in `docs/rules/`.
 
-- Punch list: file + line + reason.
-- Severity: blocker / recommended / nit.
-- Missing docs or ADRs blocking merge.
+## Rules
+
+- Keep this command a thin pointer — if the checklist changes, update the `reviewer` agent definition, not this file.

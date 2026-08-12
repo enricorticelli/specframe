@@ -11,12 +11,12 @@ Invoke when:
 
 ## Do
 
-1. Read `docs/adr/README.md` and existing ADRs to find the next free number.
-2. Draft a new ADR using `docs/adr/0000-template.md` sections: Status, Date, Context, Decision, Consequences.
-3. Status: `proposed` unless the user confirms adoption.
-4. Reference related ADRs if this decision supersedes one.
+1. Read `docs/adr/README.md` and existing ADRs to find the next free number and confirm nothing equivalent already exists.
+2. Decide the content: Status (`proposed` unless the user confirms adoption), Context, Decision, Consequences, and any related ADR this one supersedes.
+3. Delegate to the `doc-writer` agent to render and write the entry — pass category `adr`, the target file, the decided content, and source citations.
 
 ## Do not
 
 - Do not invent context. Cite source discussion or file paths.
 - Do not mark `accepted` without explicit confirmation.
+- Do not write the file yourself once content is decided — delegate to `doc-writer`.
