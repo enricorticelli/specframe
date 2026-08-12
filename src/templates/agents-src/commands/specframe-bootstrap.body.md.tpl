@@ -4,48 +4,19 @@ Populate the generated docs (ADR, rules, guidelines, runbook, glossary) by analy
 
 ## When to use
 
-Run after `specframe init` on a non-empty repository, to derive initial docs from code already in place.
+Run after `specframe init` on a non-empty repository, to derive initial docs from code already in place. Also useful to catch up docs/ after a period of drift.
 
-## Before starting
+## What it does
 
-Read the current scaffolds to see which sections are still empty:
+Delegates the scan-and-draft work to the `bootstrapper` agent, which can run isolated from this conversation so the codebase scan doesn't fill its context. The agent decides what to draft from evidence in the code, then hands the actual writing to the `doc-writer` agent, one call per finding.
 
-- docs/adr/README.md
-- docs/rules/README.md
-- docs/guidelines/README.md
-- docs/runbook/README.md
-- docs/glossary/README.md
+The canonical scanning/drafting procedure lives in the `bootstrapper` agent definition — do not duplicate it here.
 
 ## Steps
 
-1. **Scan the codebase** — language, build tool, package manager, test framework, lint/format config, CI workflows, deployment scripts, env var usage, secret handling.
-
-2. **Draft ADRs** for architectural decisions detectable from the code:
-   - language/framework, persistence, integration protocols, auth approach, testing strategy.
-   - One ADR per decision in `docs/adr/NNNN-<slug>.md`. Use `accepted` only if the pattern is clearly in use; otherwise `proposed`.
-
-3. **Extract rules** from enforced constraints (lint/format in CI, secret handling, required env vars, security controls). Append to `docs/rules/README.md` or create `docs/rules/NNNN-<slug>.md`.
-
-4. **Extract guidelines** from observed conventions (naming, folder structure, error handling, logging, test organization). Append to `docs/guidelines/README.md` or create `docs/guidelines/NNNN-<slug>.md`.
-
-5. **Extract runbooks** from operational scripts (deploy, CI jobs, Makefile targets, rotations). One runbook per procedure in `docs/runbook/NNNN-<slug>.md`.
-
-6. **Extract glossary terms** — core domain entities from models/types, acronyms, business-specific terms.
-   - Group related terms by domain area (e.g. auth, billing, catalog). Create one `docs/glossary/NNNN-<slug>.md` per group using the `docs/glossary/0000-template.md` structure (Definition, Aliases, Context, Related, Source).
-   - Put each term in a `## Term` section. Write a precise 1–2 sentence definition and cite a `path:line` source for every term.
-   - In `docs/glossary/README.md`, add a one-line index entry linking to each group file. Do not dump all definitions into the README.
-   - Only when a single ungrouped term emerges may you append it directly to the README index.
+1. Invoke the `bootstrapper` agent.
+2. Relay its report as-is: counts of ADR/rules/guidelines/runbook/glossary entries drafted, file paths touched, and open TODOs requiring human input.
 
 ## Rules
 
-- Do not invent. If a section cannot be derived from evidence, leave a short TODO.
-- Cite file paths and line numbers for every draft.
-- Prefer small accurate entries over long speculative ones.
-- Do not modify docs the user has already written — only add missing content.
-
-## Output
-
-Summary listing:
-- number of ADRs / rules / guidelines / runbooks / glossary entries drafted.
-- file paths created or modified.
-- open TODOs requiring human input.
+- If the agent reports TODOs, surface them to the user — don't silently resolve them.
