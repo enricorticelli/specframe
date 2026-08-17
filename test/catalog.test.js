@@ -103,10 +103,13 @@ test('a gate returns true when the answer it depends on is missing', () => {
   }
 });
 
-test('each decision recommends at most one option', () => {
+test('each decision recommends exactly one option', () => {
+  // Exactly one, not at most one: `enter` in the wizard takes the recommendation,
+  // so a decision without one is a question enter cannot answer — and `--yes`
+  // and the presets would quietly leave it open.
   for (const d of DECISIONS) {
     const recommended = d.options.filter((o) => o.recommended);
-    assert.ok(recommended.length <= 1, `${d.id} recommends ${recommended.length} options`);
+    assert.equal(recommended.length, 1, `${d.id} recommends ${recommended.length} options`);
   }
 });
 

@@ -1,7 +1,7 @@
 import process from 'node:process';
 
 import { applyRecommendedDefaults } from './answers.js';
-import { GROUPS, decisionsForGroup, isRelevant } from './decisions/catalog.js';
+import { GROUPS, decisionsForGroup, isRelevant, recommendedValue } from './decisions/catalog.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import {
   buildReview,
@@ -11,7 +11,7 @@ import {
   formatSectionDigest,
   openDecisionIds,
 } from './review.js';
-import { terminalWidth, theme, wrapText } from './style.js';
+import { terminalWidth, theme, truncate, wrapText } from './style.js';
 import {
   CONTROL,
   createReadlineIo,
@@ -53,7 +53,7 @@ const MODES = [
     value: 'guided',
     label: 'Guided — answer decisions now',
     recommended: true,
-    hint: 'Every decision you take becomes an ADR plus the rules and guidelines it implies. Skip any question, or a whole section, with one key.',
+    hint: 'Every decision you take becomes an ADR plus the rules and guidelines it implies. Enter takes the recommended option; one key leaves a question, or a whole section, open.',
   },
   {
     value: 'blank',
@@ -106,7 +106,7 @@ async function askChoice(io, { header, options, multi = false, help, promptLabel
       continue;
     }
     if (result.kind === CONTROL.INVALID) {
-      io.log(formatError(`${result.reason}. Type a number, or press enter to skip.`, { theme }));
+      io.log(formatError(`${result.reason}. Type a number, or press enter for the default.`, { theme }));
       continue;
     }
     return result;
@@ -181,39 +181,49 @@ async function askMode(io) {
   return choice.kind === CONTROL.SELECT ? MODES[choice.values[0] - 1].value : 'guided';
 }
 
+// What `enter` resolves to for one decision: the answer already given if there
+// is one, otherwise the recommendation. Returned as an option so the prompt can
+// name it — an unnamed default is how the wizard lost its first user.
+function acceptedOption(decision, answers) {
+  const current = answers[decision.id];
+  const value = current !== undefined ? current : recommendedValue(decision);
+  return decision.options.find((option) => option.value === value) ?? null;
+}
+
 // Ask one decision and report what the answer means for the answers map, without
 // touching it. Shared by the wizard and by the review table's "change row 12",
 // so a decision is presented identically wherever you reach it from.
 async function askDecision(io, { decision, number, total, answers, lead = null }) {
   const width = terminalWidth();
   const current = answers[decision.id];
-  const currentOption = current ? decision.options.find((o) => o.value === current) : null;
+  const accepted = acceptedOption(decision, answers);
+
+  // Enter names the option it will take, and says whether that is keeping your
+  // answer or taking the recommendation.
+  let enterHint = 'leave it open';
+  if (accepted) {
+    const label = truncate(accepted.label, 34, theme.glyph.ellipsis);
+    enterHint = current !== undefined ? `keep ${label}` : `${label} ${theme.glyph.star}`;
+  }
 
   const keys = formatKeys(
     [
       [`1-${decision.options.length}`, 'choose'],
-      currentOption ? ['enter', `keep ${currentOption.label}`] : ['enter', 'skip'],
-      currentOption ? ['x', 'reopen it'] : null,
+      ['enter', enterHint],
+      ['s', 'leave it open'],
       ['?', 'why this matters'],
       ['b', 'back'],
-    ],
-    { theme, indent: '  ', gap: 2 },
-  );
-
-  const trailer = formatKeys(
-    [
-      ['d', 'recommend the rest'],
-      ['a', 'skip the rest'],
+      ['d', 'take every recommendation from here'],
+      ['a', 'leave the rest open'],
       ['q', 'quit'],
     ],
-    { theme, indent: '  ', gap: 2 },
+    { theme, indent: '  ', gap: 2, width },
   );
 
   const header = [
     lead ? `\n${theme.muted(lead)}` : null,
     formatQuestion({ number, total, decision, theme, width, current }),
     keys,
-    trailer,
     '',
   ]
     .filter((part) => part !== null)
@@ -230,6 +240,52 @@ async function askDecision(io, { decision, number, total, answers, lead = null }
       ...decision.options.map((o) => `${o.label}: ${o.statement}`),
     ].join('\n'),
   });
+}
+
+/**
+ * Fold a prompt result into the answers map and say out loud what happened.
+ *
+ * Handles the three outcomes that are about *this* decision — a pick, `enter`,
+ * `s` — and reports back when the result is flow control (back, quit, the
+ * bulk keys) for the caller to deal with. Shared so that `enter` cannot come to
+ * mean one thing in the wizard and another in the review table.
+ *
+ * @returns {boolean} true when the result was an answer and has been applied.
+ */
+function applyDecisionResult(io, { decision, result, answers }) {
+  if (result.kind === CONTROL.SELECT) {
+    const option = decision.options[result.values[0] - 1];
+    answers[decision.id] = option.value;
+    io.log(formatChoiceEcho(decision, option, { theme }));
+    return true;
+  }
+
+  if (result.kind === CONTROL.ACCEPT) {
+    const current = answers[decision.id];
+    const option = acceptedOption(decision, answers);
+    if (!option) {
+      // No recommendation to fall back on: enter cannot invent an answer, so the
+      // decision stays open and says so rather than looking like it was taken.
+      io.log(formatSkipEcho('no recommended option — left open', { theme }));
+      return true;
+    }
+    answers[decision.id] = option.value;
+    io.log(
+      formatChoiceEcho(decision, option, {
+        theme,
+        note: current !== undefined ? 'kept' : 'recommended',
+      }),
+    );
+    return true;
+  }
+
+  if (result.kind === CONTROL.SKIP) {
+    delete answers[decision.id];
+    io.log(formatSkipEcho('left open — it will be listed in docs/DECISIONS.md', { theme }));
+    return true;
+  }
+
+  return false;
 }
 
 // The decision wizard. Returns the answers map, or null when the user quits.
@@ -326,29 +382,7 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
       });
 
       if (result.kind === CONTROL.QUIT) return null;
-      if (result.kind === CONTROL.SELECT) {
-        const option = decision.options[result.values[0] - 1];
-        answers[decision.id] = option.value;
-        io.log(formatChoiceEcho(decision, option, { theme }));
-        continue;
-      }
-      if (result.kind === CONTROL.CLEAR) {
-        delete answers[decision.id];
-        io.log(formatSkipEcho('reopened — it will be listed in docs/DECISIONS.md', { theme }));
-        continue;
-      }
-      if (result.kind === CONTROL.SKIP) {
-        // Enter means "no change": it leaves an existing answer alone rather
-        // than silently discarding it on a second pass. `x` is how you reopen.
-        const current = answers[decision.id];
-        if (current === undefined) {
-          io.log(formatSkipEcho('left open', { theme }));
-        } else {
-          const option = decision.options.find((o) => o.value === current);
-          io.log(formatSkipEcho(`kept ${option?.label ?? current}`, { theme }));
-        }
-        continue;
-      }
+      if (applyDecisionResult(io, { decision, result, answers })) continue;
       if (result.kind === CONTROL.BACK) {
         asked -= 1; // undo this question's own increment
         let j = i - 1;
@@ -415,18 +449,11 @@ async function reviewScreen(io, { decisions, editable = null }) {
           [`1-${review.total}`, 'change that one'],
           review.open > 0 ? ['o', `answer the ${review.open} still open`] : null,
           ['f', openOnly ? 'show all' : 'show only open'],
-        ],
-        { theme },
-      ),
-    );
-    io.log(
-      formatKeys(
-        [
           ['w', 'walk every section again'],
           ['enter', 'back'],
           ['q', 'quit'],
         ],
-        { theme },
+        { theme, width },
       ),
     );
 
@@ -495,13 +522,8 @@ async function reviewScreen(io, { decisions, editable = null }) {
       });
 
       if (result.kind === CONTROL.QUIT) return null;
-      if (result.kind === CONTROL.SELECT) {
-        const option = row.decision.options[result.values[0] - 1];
-        answers[row.decision.id] = option.value;
-        io.log(formatChoiceEcho(row.decision, option, { theme }));
-      } else if (result.kind === CONTROL.CLEAR) {
-        delete answers[row.decision.id];
-        io.log(formatSkipEcho('reopened', { theme }));
+      if (applyDecisionResult(io, { decision: row.decision, result, answers })) {
+        // handled: the answer is recorded and echoed
       } else if (result.kind === CONTROL.DEFAULTS) {
         // "The rest", from a review, means every decision still open — but never
         // one this run is not allowed to answer.
@@ -526,6 +548,16 @@ async function reviewScreen(io, { decisions, editable = null }) {
   }
 }
 
+// What the answers will produce, wrapped rather than overflowing: on a narrow
+// terminal this list is long enough to run off the edge.
+function formatArtifactLine(s, { width = terminalWidth() } = {}) {
+  const text =
+    `${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+    `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`;
+  const lines = wrapText(text, width - 4, '    ');
+  return [`  ${theme.muted(theme.glyph.arrow)} ${lines[0].trim()}`, ...lines.slice(1)].join('\n');
+}
+
 function logSummary(io, decisions, { width = terminalWidth() } = {}) {
   const review = buildReview(decisions);
   const s = summarize(review.resolved);
@@ -538,10 +570,7 @@ function logSummary(io, decisions, { width = terminalWidth() } = {}) {
     `  ${theme.bold(String(s.decided))} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
       `${s.open > 0 ? theme.warn(String(s.open)) : theme.bold('0')} ${theme.muted('left open')}`,
   );
-  io.log(
-    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
-      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
-  );
+  io.log(formatArtifactLine(s, { width }));
   if (s.open > 0) {
     io.log(`  ${theme.muted('Open decisions are listed in docs/DECISIONS.md.')}`);
   }
@@ -559,10 +588,7 @@ function logBlankSummary(io, { width = terminalWidth() } = {}) {
     `  ${theme.bold('0')} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
       `${theme.warn(String(s.open))} ${theme.muted('left open')}`,
   );
-  io.log(
-    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
-      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
-  );
+  io.log(formatArtifactLine(s, { width }));
   io.log(`  ${theme.muted('Every decision is listed in docs/DECISIONS.md.')}`);
   io.log('');
 }
@@ -670,7 +696,6 @@ export function renderReview(decisions, { width = terminalWidth(), openOnly = fa
     '',
     `  ${theme.bold(String(s.decided))} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
       `${s.open > 0 ? theme.warn(String(s.open)) : theme.bold('0')} ${theme.muted('left open')}`,
-    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
-      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+    formatArtifactLine(s, { width }),
   ].join('\n');
 }

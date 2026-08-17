@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+import process from 'node:process';
+
 import { askQuestions, parseAgentTargets } from '../src/prompts.js';
 import { resolvePreset } from '../src/decisions/presets.js';
+import { configureTheme, stripAnsi, visibleWidth } from '../src/style.js';
 import { createScriptedIo } from '../src/tui.js';
 
 // The wizard is driven through a scripted io, so the "how fast can this be
@@ -63,9 +66,26 @@ test('back at the first question of a group re-asks that question', async () => 
   assert.equal(config.decisions['architecture-style'], 'service-based');
 });
 
-test('skipping an unanswered question leaves it open rather than defaulting it', async () => {
+test('s is the only way to leave a question unanswered', async () => {
   const config = await run(['', 's', 'a']);
   assert.equal(config.decisions['architecture-style'], undefined);
+});
+
+test('enter takes the recommended option, because that is what enter means', async () => {
+  const config = await run(['', '', 'a']);
+  assert.equal(
+    config.decisions['architecture-style'],
+    'modular-monolith',
+    'the option marked ★ recommended',
+  );
+});
+
+test('enter through the whole catalog records it, rather than reaching the end empty', async () => {
+  // The failure this prevents: someone presses enter forty times, believing they
+  // are taking the defaults, and arrives at the summary with nothing decided.
+  const io = createScriptedIo(Array.from({ length: 120 }, () => ''));
+  const config = await askQuestions({ io, seed, mode: 'guided', basics: false });
+  assert.deepEqual(config.decisions, resolvePreset('balanced').answers);
 });
 
 test('d part-way through fills only what is still ahead', async () => {
@@ -142,8 +162,8 @@ test('enter keeps an answer already given instead of discarding it', async () =>
   assert.equal(config.decisions['architecture-style'], 'monolith');
 });
 
-test('x reopens a decision already answered', async () => {
-  const config = await run(['', '1', 'b', 'x', 'a']);
+test('s reopens a decision already answered', async () => {
+  const config = await run(['', '1', 'b', 's', 'a']);
   assert.equal(config.decisions['architecture-style'], undefined);
 });
 
@@ -182,6 +202,44 @@ test('a decision outside this run cannot be re-answered from the review table', 
   assert.match(text, /already recorded/);
   assert.match(text, /docs\/adr\/0100-architecture-style\.md/, 'and how to supersede it');
   assert.equal(config.decisions['architecture-style'], 'monolith', 'left untouched');
+});
+
+test('the prompt names the option enter will take', async () => {
+  // The bug this guards: an unnamed default. If enter is going to answer, the
+  // line above the cursor has to say what it is answering with.
+  const io = createScriptedIo(['', '', 'a']);
+  await askQuestions({ io, seed, mode: 'guided', basics: false });
+  const text = io.output.join('\n');
+  assert.match(text, /\[enter\] Modular monolith/, 'the recommended option, by name');
+  assert.match(text, /\[s\] leave it open/, 'and how to not answer');
+  assert.match(text, /recommended/, 'the echo says the answer came from the recommendation');
+});
+
+test('nothing the wizard prints is wider than the terminal', async () => {
+  // Colour on, because every width here is measured with escape sequences in the
+  // string: a padding bug shows up as a torn table only when styling is live.
+  const columns = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+  try {
+    for (const limit of [60, 80]) {
+      Object.defineProperty(process.stdout, 'columns', { value: limit, configurable: true });
+      configureTheme({ color: true, unicode: true });
+
+      const io = createScriptedIo(
+        // Mostly enter, an occasional `s`, then a look at the review table: enough
+        // to print every screen the wizard has.
+        [...Array.from({ length: 60 }, (_, i) => (i % 7 === 3 ? 's' : '')), 'r', '', ''],
+      );
+      await askQuestions({ io, seed, mode: 'guided', basics: false, version: '9.9.9' });
+
+      const wide = io.output
+        .flatMap((entry) => String(entry).split('\n'))
+        .filter((line) => visibleWidth(line) > limit);
+      assert.deepEqual(wide.map(stripAnsi), [], `lines wider than ${limit} columns`);
+    }
+  } finally {
+    configureTheme({ color: false, unicode: false });
+    if (columns) Object.defineProperty(process.stdout, 'columns', columns);
+  }
 });
 
 test('the summary reports what will be written', async () => {

@@ -77,11 +77,13 @@ Each answer becomes an **ADR** — including the alternatives you rejected and w
 
 39 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
 
-**Skipping is the fast path:** `enter` no change · `s` skip (a whole section, at its header) · `d` recommended for everything left · `a` skip everything left · `b` back · `x` reopen an answer · `?` explain · `q` quit.
+**`enter` takes the recommended option** — the one marked ★, named in the prompt so you can see what you're accepting. Hold enter down and you get the `balanced` preset one visible answer at a time. On a second pass over a question you've already answered, enter *keeps* your answer instead.
 
-Enter never answers anything, so a default can't slip in unnoticed — and on a second pass it *keeps* what you already chose instead of dropping it (`x` is how you reopen one). Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you skip lands in `docs/DECISIONS.md` as open, and `specframe decide` picks it up later.
+**Not answering is the deliberate act:** `s` leaves a question open (or a whole section, at its header) · `a` leaves everything remaining open · `d` takes every recommendation from here at once · `b` back · `?` explain · `q` quit.
 
-Each section header shows where you are and how much of it is answered; each answer is echoed back with the ADR it will produce. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing).
+Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you leave open lands in `docs/DECISIONS.md`, and `specframe decide` picks it up later.
+
+Every answer is echoed with the ADR it will produce and whether it came from the recommendation, each section header shows how much of it is answered, and nothing is written until you've seen the review table — so accepting a default is visible three times over, not silent. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing).
 
 ### Reviewing before you write
 

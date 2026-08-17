@@ -96,8 +96,9 @@ Init has two modes:
   blank    Every template plus its filling instructions, and the full decision
            backlog in docs/DECISIONS.md. No decisions taken.
   guided   Answer decisions from the catalog. Each one becomes an ADR plus the
-           rules, guidelines, runbooks and glossary terms it implies. Skipping
-           is one key per question, or per section.
+           rules, guidelines, runbooks and glossary terms it implies. Enter
+           takes the recommended option; s leaves a question, or a whole
+           section, open. Nothing is written before you see the review table.
 
 Init options:
       --preset <id>   ${PRESET_IDS.join(' | ')}
