@@ -51,7 +51,9 @@ const ACTION_TONE = {
 function actionTag(label, { dryRun = false } = {}) {
   const tone = theme[ACTION_TONE[label] ?? 'muted'];
   const prefix = dryRun ? theme.muted('[dry-run] ') : '';
-  return prefix + pad(tone(`[${label}]`), 10);
+  // 11, not 10: `[conflict]` is itself ten columns wide, and padding to its own
+  // length leaves the path with no space in front of it.
+  return prefix + pad(tone(`[${label}]`), 11);
 }
 
 const TEMPLATE_TARGETS = [
@@ -300,10 +302,13 @@ async function buildRulesEntries({ targets, vars }) {
 // render.js fills only the placeholders a catalog option supplied; the global
 // ones ({{projectName}}, {{packageManager}}) are substituted here, so generated
 // documents and static templates go through the same final pass.
+// The documents a decision produces. Marked `derived` — a non-persisted marker,
+// like `regenerable` — because `specframe revise` needs to be able to refresh
+// exactly this set when an answer changes, and nothing else.
 function buildDecisionEntries(resolved, { vars }) {
   const entries = [];
   const add = (relpath, content) =>
-    entries.push({ relpath, content: renderTemplate(content, vars), managed: false });
+    entries.push({ relpath, content: renderTemplate(content, vars), managed: false, derived: true });
 
   for (const adr of resolved.adrs) add(adr.relpath, renderAdr(adr, { date: vars.initDate, resolved }));
   for (const item of resolved.rules) add(item.relpath, renderRule(item));
@@ -326,6 +331,18 @@ export function normalizeConfig(config = {}) {
     if (decisions[id] !== undefined && source === 'detected') provenance[id] = source;
   }
 
+  // Revision history, same treatment: kept only for decisions still recorded,
+  // and only for entries that carry both a date and a value. A malformed entry
+  // would otherwise render as an ADR history line saying nothing.
+  const revisions = {};
+  for (const [id, entries] of Object.entries(config.revisions ?? {})) {
+    if (decisions[id] === undefined || !Array.isArray(entries)) continue;
+    const clean = entries
+      .filter((entry) => entry && typeof entry.date === 'string' && typeof entry.value === 'string')
+      .map((entry) => ({ date: entry.date, value: entry.value }));
+    if (clean.length > 0) revisions[id] = clean;
+  }
+
   return {
     configVersion: 2,
     projectName: config.projectName,
@@ -333,6 +350,7 @@ export function normalizeConfig(config = {}) {
     mode,
     decisions,
     provenance,
+    revisions,
     agentTargets: config.agentTargets ?? [],
     initDate: config.initDate ?? FALLBACK_DATE,
   };
@@ -346,9 +364,10 @@ export function normalizeConfig(config = {}) {
  */
 export async function buildTemplatePlan(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
-  const { projectName, packageManager, mode, decisions, provenance, agentTargets, initDate } = config;
+  const { projectName, packageManager, mode, decisions, provenance, revisions, agentTargets, initDate } =
+    config;
 
-  const resolved = resolveDecisions({ mode, answers: decisions, provenance });
+  const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions });
 
   const vars = {
     projectName,
@@ -433,6 +452,75 @@ export async function updateTemplateSet(rawConfig) {
   const diskHashes = await hashDiskFiles(targetDir, plan);
 
   const actions = planUpdateActions({ plan, manifest, diskHashes, force });
+
+  await applyActions({ targetDir, actions, dryRun });
+
+  if (!dryRun) {
+    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+  }
+
+  return actions;
+}
+
+/**
+ * What changing a set of answers does to the document set.
+ *
+ * Computed by resolving both the old and the new answers, which is the only
+ * honest way to answer "what is now stale": a rule is not orphaned because the
+ * decision that emitted it changed, but because *no* decision emits it any more.
+ * Nothing is deleted — these documents are the user's, and a rule they extended
+ * by hand is worth more than the tidiness of removing it.
+ *
+ * @returns {{ orphaned: object[], added: object[] }} both in document order.
+ */
+export function planRevisionEffects({ before, after }) {
+  const KINDS = ['rules', 'guidelines', 'runbooks'];
+
+  const index = (resolved) => {
+    const map = new Map();
+    for (const kind of KINDS) {
+      for (const item of resolved[kind]) {
+        map.set(item.relpath, { kind, number: item.number, title: item.entry.title, relpath: item.relpath });
+      }
+    }
+    return map;
+  };
+
+  const oldDocs = index(before);
+  const newDocs = index(after);
+
+  return {
+    orphaned: [...oldDocs.values()].filter((doc) => !newDocs.has(doc.relpath)),
+    added: [...newDocs.values()].filter((doc) => !oldDocs.has(doc.relpath)),
+  };
+}
+
+/**
+ * Revise decisions already recorded in a repository.
+ *
+ * The one operation that rewrites a document specframe wrote and the user owns,
+ * so it is deliberately narrow: only the documents a decision produces are in
+ * scope (`derived`), plus the indexes that describe the set. Each is treated as
+ * managed *for this operation only* — refreshed when untouched since specframe
+ * wrote it, and landing as `.specframe-new` beside a version you edited by hand.
+ * That is what makes a revision safe to run on a decision log someone has been
+ * writing in for a year.
+ */
+export async function reviseTemplateSet(rawConfig) {
+  const { targetDir, version, force = false, dryRun = false } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const plan = await buildTemplatePlan(config);
+  const manifest = await readManifest(targetDir);
+  const diskHashes = await hashDiskFiles(targetDir, plan);
+
+  const actions = planUpdateActions({
+    plan: plan.map((entry) =>
+      entry.regenerable || entry.derived ? { ...entry, managed: true } : entry,
+    ),
+    manifest,
+    diskHashes,
+    force,
+  });
 
   await applyActions({ targetDir, actions, dryRun });
 

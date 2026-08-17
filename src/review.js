@@ -11,7 +11,7 @@
 // decision retired by an earlier answer never appears as a row you could edit.
 // Pure functions only — prompts.js does the asking, this decides what to show.
 
-import { DECISIONS, GROUPS, recommendedValue } from './decisions/catalog.js';
+import { DECISIONS, GROUPS, getOption, recommendedValue } from './decisions/catalog.js';
 import { resolveDecisions } from './decisions/resolve.js';
 import { renderTable } from './table.js';
 import { plainTheme, terminalWidth } from './style.js';
@@ -206,6 +206,65 @@ export function formatReviewTable(
   ].filter(Boolean);
 
   return [renderTable({ columns, rows, width, theme }), '', ...legend].join('\n');
+}
+
+/**
+ * What a revision actually changes, decision by decision.
+ *
+ * @param {object} before  answers as recorded
+ * @param {object} after   answers as they would be written
+ * @returns {object[]} { decision, kind, fromValue, toValue, from, to } — kind is
+ *                     'changed', 'recorded' (was open) or 'reopened' (was
+ *                     recorded). The raw values are kept alongside the resolved
+ *                     options because the history written into an ADR stores the
+ *                     value, while the table shows the label.
+ */
+export function diffAnswers(before = {}, after = {}) {
+  const changes = [];
+
+  for (const decision of DECISIONS) {
+    const fromValue = before[decision.id];
+    const toValue = after[decision.id];
+    if (fromValue === toValue) continue;
+
+    const kind =
+      fromValue === undefined ? 'recorded' : toValue === undefined ? 'reopened' : 'changed';
+    changes.push({
+      decision,
+      kind,
+      fromValue: fromValue ?? null,
+      toValue: toValue ?? null,
+      from: fromValue ? (getOption(decision, fromValue) ?? { label: fromValue }) : null,
+      to: toValue ? (getOption(decision, toValue) ?? { label: toValue }) : null,
+    });
+  }
+
+  return changes;
+}
+
+// The confirmation for a revision: three columns, because "what am I about to
+// change" is a before/after question and a single list of new values cannot
+// answer it.
+export function formatChangeTable(changes, { theme = plainTheme, width = terminalWidth() } = {}) {
+  if (changes.length === 0) return theme.muted('  Nothing changed.');
+
+  const columns = [
+    { label: 'Decision', min: 16, max: 34 },
+    { label: 'From', min: 12, max: 26 },
+    { label: 'To', min: 12, max: 26 },
+    { label: 'ADR', min: 8, fixed: true },
+  ];
+
+  const rows = changes.map(({ decision, from, to }) => ({
+    cells: [
+      decisionLabel(decision),
+      from ? theme.muted(from.label) : theme.muted('not decided'),
+      to ? theme.bold(to.label) : theme.warn('not decided'),
+      theme.tag(decision.adr),
+    ],
+  }));
+
+  return renderTable({ columns, rows, width, theme });
 }
 
 // The artifacts a set of answers produces. Shown next to the digest so "23

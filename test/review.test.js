@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   buildReview,
+  diffAnswers,
   findReviewRow,
+  formatChangeTable,
   formatReviewTable,
   formatSectionDigest,
   openDecisionIds,
@@ -124,6 +126,55 @@ test('the digest has one row per section plus a total', () => {
   for (const entry of review.groups) assert.ok(rendered.includes(entry.group.title));
   assert.match(rendered, /Total/);
   assert.match(rendered, new RegExp(`${review.decided}/${review.total}`));
+});
+
+// --- the revision diff ------------------------------------------------------
+
+test('a diff names what changed, in which direction', () => {
+  const changes = diffAnswers(
+    { 'architecture-style': 'modular-monolith', tdd: 'strict' },
+    { 'architecture-style': 'microservices', tdd: 'strict' },
+  );
+
+  assert.equal(changes.length, 1, 'an unchanged answer is not a change');
+  const [change] = changes;
+  assert.equal(change.decision.id, 'architecture-style');
+  assert.equal(change.kind, 'changed');
+  assert.equal(change.fromValue, 'modular-monolith');
+  assert.equal(change.toValue, 'microservices');
+  assert.equal(change.from.label, 'Modular monolith');
+  assert.equal(change.to.label, 'Microservices');
+});
+
+test('recording and reopening are distinguished from changing', () => {
+  assert.equal(diffAnswers({}, { tdd: 'strict' })[0].kind, 'recorded');
+  assert.equal(diffAnswers({ tdd: 'strict' }, {})[0].kind, 'reopened');
+  assert.deepEqual(diffAnswers({ tdd: 'strict' }, { tdd: 'strict' }), []);
+});
+
+test('the diff follows catalog order, not the order answers were changed', () => {
+  const changes = diffAnswers({}, { tdd: 'strict', 'architecture-style': 'monolith' });
+  assert.deepEqual(
+    changes.map((change) => change.decision.id),
+    ['architecture-style', 'tdd'],
+  );
+});
+
+test('the change table shows before and after, and the ADR that carries it', () => {
+  const changes = diffAnswers(
+    { 'architecture-style': 'modular-monolith' },
+    { 'architecture-style': 'microservices' },
+  );
+  const rendered = stripAnsi(formatChangeTable(changes, { theme: plainTheme, width: 90 }));
+
+  assert.match(rendered, /Architecture style/);
+  assert.match(rendered, /Modular monolith/);
+  assert.match(rendered, /Microservices/);
+  assert.match(rendered, /0100/);
+});
+
+test('a change table with nothing in it says so instead of drawing a frame', () => {
+  assert.match(stripAnsi(formatChangeTable([], { theme: plainTheme })), /Nothing changed/);
 });
 
 test('a review of nothing renders a sentence, not an empty frame', () => {

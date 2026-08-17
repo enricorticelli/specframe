@@ -69,9 +69,20 @@ function partitionAnswers(answers) {
  *                                    the fact — the ADR says so, and asks for the
  *                                    evidence in the code rather than pretending
  *                                    the choice is being made now.
+ * @param {object}  input.revisions   { [decisionId]: [{ date, value }] } — the
+ *                                    choices this decision used to hold, oldest
+ *                                    first. `specframe revise` appends to it, and
+ *                                    the ADR renders it as its own history: a
+ *                                    decision that changed silently is a decision
+ *                                    nobody can trust.
  * @returns resolved document set — see the shape assembled at the end.
  */
-export function resolveDecisions({ mode = 'blank', answers = {}, provenance = {} } = {}) {
+export function resolveDecisions({
+  mode = 'blank',
+  answers = {},
+  provenance = {},
+  revisions = {},
+} = {}) {
   const { valid, invalid } = partitionAnswers(mode === 'blank' ? {} : answers);
 
   const decided = [];
@@ -113,6 +124,14 @@ export function resolveDecisions({ mode = 'blank', answers = {}, provenance = {}
     provenance: provenance[decision.id] === 'detected' ? 'detected' : 'chosen',
     // Everything not chosen, so the ADR records what was weighed and rejected.
     alternatives: decision.options.filter((o) => o.value !== option.value),
+    // Past choices, resolved to their options so the renderer can name them.
+    // An entry whose option no longer exists in the catalog keeps its raw value
+    // rather than disappearing: it still happened.
+    revisions: (revisions[decision.id] ?? []).map((entry) => ({
+      date: entry.date,
+      value: entry.value,
+      option: getOption(decision, entry.value) ?? null,
+    })),
   }));
 
   // --- derived documents ----------------------------------------------------

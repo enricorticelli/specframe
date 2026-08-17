@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import process from 'node:process';
 
-import { askQuestions, parseAgentTargets } from '../src/prompts.js';
+import { askQuestions, askRevision, parseAgentTargets } from '../src/prompts.js';
 import { resolvePreset } from '../src/decisions/presets.js';
 import { configureTheme, stripAnsi, visibleWidth } from '../src/style.js';
 import { createScriptedIo } from '../src/tui.js';
@@ -240,6 +240,58 @@ test('nothing the wizard prints is wider than the terminal', async () => {
     configureTheme({ color: false, unicode: false });
     if (columns) Object.defineProperty(process.stdout, 'columns', columns);
   }
+});
+
+// --- revising what is already recorded --------------------------------------
+
+const RECORDED = { 'architecture-style': 'modular-monolith', tdd: 'strict' };
+
+const revise = (lines, options = {}) =>
+  askRevision({ io: createScriptedIo(lines), decisions: RECORDED, ...options });
+
+test('revising opens the table first, and every row is editable', async () => {
+  // Row 1 is a recorded decision — in `decide` it would be refused, here it is
+  // the whole point of the command.
+  const io = createScriptedIo(['1', '1', '', '']);
+  const answers = await askRevision({ io, decisions: RECORDED });
+  assert.equal(answers['architecture-style'], 'monolith', 'changed by row number');
+  assert.equal(answers.tdd, 'strict', 'everything else is left alone');
+  assert.doesNotMatch(io.output.join('\n'), /already recorded/);
+});
+
+test('the confirmation is a before/after table', async () => {
+  const io = createScriptedIo(['1', '1', '', '']);
+  await askRevision({ io, decisions: RECORDED });
+  const text = io.output.join('\n');
+  assert.match(text, /Modular monolith/, 'what it was');
+  assert.match(text, /Monolith/, 'what it becomes');
+  assert.match(text, /write 1 revision/);
+});
+
+test('a revision that changes nothing says so and offers no write', async () => {
+  const io = createScriptedIo(['', 'q']);
+  assert.equal(await askRevision({ io, decisions: RECORDED }), null);
+  assert.match(io.output.join('\n'), /Nothing changed/);
+});
+
+test('quitting the revision returns nothing, so the caller writes nothing', async () => {
+  assert.equal(await revise(['q']), null, 'from the table');
+  assert.equal(await revise(['1', '1', '', 'q']), null, 'from the confirmation');
+});
+
+test('a target opens that decision straight away', async () => {
+  const io = createScriptedIo(['2', '', '']);
+  const answers = await askRevision({ io, decisions: RECORDED, target: 'tdd' });
+  assert.equal(answers.tdd, 'pragmatic', 'the second option of the targeted decision');
+  assert.match(io.output.join('\n'), /Revising tdd/);
+});
+
+test('a target that does not apply here is refused rather than guessed at', async () => {
+  // Contract testing is gated on a distributed architecture; this repo is a
+  // modular monolith, so the question does not exist to revise.
+  const io = createScriptedIo(['']);
+  assert.equal(await askRevision({ io, decisions: RECORDED, target: 'contract-testing' }), null);
+  assert.match(io.output.join('\n'), /does not apply/);
 });
 
 test('the summary reports what will be written', async () => {

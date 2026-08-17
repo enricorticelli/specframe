@@ -186,7 +186,7 @@ Nothing already on disk moves. A document's number comes from the catalog, not f
 
 `decide` shows the same review table, with the decisions already recorded dimmed: they're there for context, but a recorded decision is superseded by editing its ADR, not by re-answering it.
 
-Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — but only if you haven't edited them; if you have, the new version lands beside them as `.specframe-new`. An already-recorded decision is never silently rewritten: supersede its ADR instead.
+Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — but only if you haven't edited them; if you have, the new version lands beside them as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
 
 ---
 
@@ -198,6 +198,27 @@ specframe review --open   # only what's still open
 ```
 
 Reads `.specframe/manifest.json` and prints the section digest plus the full decision table — what was decided, which ADR carries it, and which answers merely took the recommendation. It's the one-command answer to "what did we agree on here", without opening thirty ADRs, and it writes nothing.
+
+---
+
+## Changing your mind
+
+```bash
+specframe revise                                     # the table, every row editable
+specframe revise architecture-style                  # straight to one decision
+specframe revise --set architecture-style=microservices   # no prompting
+specframe revise --set tdd=strict -n                 # preview first
+```
+
+`decide` answers what's open; `revise` changes what's already recorded. It's the one command that rewrites a document specframe wrote and you own, so it's deliberately narrow and loud about it:
+
+- **The ADR keeps its number.** `0100` is *the* architecture-style ADR forever — that's the numbering promise the whole catalog rests on. It gains a `Revised:` header and a **History** section naming what the decision used to be, with the tradeoff that made you leave it, plus a prompt to write down *why* — the one part no tool can fill in.
+- **Confirmation is a before/after table.** Decision, from, to, ADR. Nothing is written until you've seen it.
+- **Your prose is never clobbered.** A document you edited by hand is kept and the new version lands beside it as `<file>.specframe-new`, exactly like `update`. `--force` if you want it overwritten.
+- **Stale documents are reported, never deleted.** Switch off a modular monolith and `R-0110 Modules communicate only through their public surface` is no longer implied by anything — but you may have extended it, so it stays on disk and gets named in the output.
+- **It tells you what it opened.** Choosing microservices makes five questions relevant that a monolith had retired; the run says so and points at `specframe decide`.
+
+The ADRs teach the command: every generated ADR ends with the exact `specframe revise <id>` line for its own decision.
 
 ---
 

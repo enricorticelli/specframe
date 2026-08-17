@@ -5,8 +5,10 @@ import { GROUPS, decisionsForGroup, isRelevant, recommendedValue } from './decis
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import {
   buildReview,
+  diffAnswers,
   findReviewRow,
   formatArtifactSummary,
+  formatChangeTable,
   formatReviewTable,
   formatSectionDigest,
   openDecisionIds,
@@ -675,6 +677,115 @@ export async function askQuestions({
         decisions = reviewed.decisions;
         walkAgain = reviewed.action === 'walk';
       }
+    }
+  } finally {
+    if (close) io.close();
+  }
+}
+
+/**
+ * Revise decisions already recorded — `specframe revise`.
+ *
+ * The review table *is* the screen here, rather than a checkpoint at the end of
+ * a wizard: you arrive knowing which answer you want to change, so the first
+ * thing shown is the numbered list of what this repo decided. Every row is
+ * editable, including the ones already carrying an ADR — that is the whole point
+ * of the command — and the confirmation is a before/after table, because writing
+ * over a decision log deserves a louder confirmation than taking a fresh one.
+ *
+ * @param {object}   options
+ * @param {object}   options.decisions  answers as currently recorded.
+ * @param {string}   options.target     decision id to open straight away.
+ * @returns the revised answers, or null when the user quits.
+ */
+export async function askRevision({
+  io = createReadlineIo(),
+  decisions = {},
+  target = null,
+  version,
+  close = true,
+} = {}) {
+  const recorded = { ...decisions };
+  let answers = { ...decisions };
+
+  try {
+    const width = terminalWidth();
+    io.log(formatBanner({ version, theme, width }));
+
+    // `specframe revise architecture-style` goes straight to the question.
+    if (target) {
+      const review = buildReview(answers);
+      const row = review.rows.find((entry) => entry.decision.id === target);
+      if (!row) {
+        io.log(
+          formatError(
+            `${target} does not apply to this configuration, so there is nothing to revise.`,
+            { theme },
+          ),
+        );
+        return null;
+      }
+      const result = await askDecision(io, {
+        decision: row.decision,
+        number: row.index,
+        total: review.total,
+        answers,
+        lead: `Revising ${row.decision.id} ${theme.glyph.bullet} ${row.group.title}`,
+      });
+      if (result.kind === CONTROL.QUIT) return null;
+      applyDecisionResult(io, { decision: row.decision, result, answers });
+    }
+
+    for (;;) {
+      const reviewed = await reviewScreen(io, { decisions: answers, editable: null });
+      if (reviewed === null) return null;
+      answers = reviewed.decisions;
+
+      if (reviewed.action === 'walk') {
+        const walked = await askDecisions(io, { seed: answers });
+        if (walked === null) return null;
+        answers = walked;
+        continue;
+      }
+
+      const changes = diffAnswers(recorded, answers);
+      io.log(sectionTitle('Revision', { width }));
+      io.log('');
+      io.log(formatChangeTable(changes, { theme, width }));
+      io.log('');
+
+      if (changes.length === 0) {
+        io.log(
+          formatKeys([['r', 'back to the table'], ['q', 'quit']], { theme, width }),
+        );
+      } else {
+        io.log(
+          `  ${theme.muted('Each revised ADR keeps its number and records the old choice under')} ` +
+            `${theme.muted('History.')}`,
+        );
+        io.log('');
+        io.log(
+          formatKeys(
+            [
+              ['enter', `write ${changes.length} revision${changes.length === 1 ? '' : 's'}`],
+              ['r', 'back to the table'],
+              ['q', 'quit, changing nothing'],
+            ],
+            { theme, width },
+          ),
+        );
+      }
+
+      const confirm = parseConfirmInput(await io.question(PROMPT()));
+      if (confirm.kind === CONTROL.QUIT) return null;
+      if (confirm.kind === 'review') continue;
+      if (confirm.kind === CONTROL.INVALID) {
+        io.log(formatError(`${confirm.reason}.`, { theme }));
+        continue;
+      }
+      // Enter on a run that changed nothing would write a manifest for no
+      // reason; the caller treats an empty diff as "nothing to do" anyway.
+      return answers;
     }
   } finally {
     if (close) io.close();
