@@ -77,9 +77,31 @@ Each answer becomes an **ADR** — including the alternatives you rejected and w
 
 39 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
 
-**Skipping is the fast path:** `enter` skip · `s` skip (a whole section, at its header) · `d` recommended for everything left · `a` skip everything left · `b` back · `?` explain · `q` quit.
+**Skipping is the fast path:** `enter` no change · `s` skip (a whole section, at its header) · `d` recommended for everything left · `a` skip everything left · `b` back · `x` reopen an answer · `?` explain · `q` quit.
 
-Enter never answers anything, so a default can't slip in unnoticed. Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you skip lands in `docs/DECISIONS.md` as open, and `specframe decide` picks it up later.
+Enter never answers anything, so a default can't slip in unnoticed — and on a second pass it *keeps* what you already chose instead of dropping it (`x` is how you reopen one). Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you skip lands in `docs/DECISIONS.md` as open, and `specframe decide` picks it up later.
+
+Each section header shows where you are and how much of it is answered; each answer is echoed back with the ADR it will produce. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing).
+
+### Reviewing before you write
+
+Thirty-odd decisions is more than anyone holds in their head, so nothing is written until you've seen the table:
+
+```
+┌────┬──────────────────────────────┬────────────────────────┬─────┬──────┐
+│  # │ Decision                     │ Choice                 │ Rec │ ADR  │
+├────┼──────────────────────────────┼────────────────────────┼─────┼──────┤
+│ Architecture                                        2 of 3 answered     │
+├─────────────────────────────────────────────────────────────────────────┤
+│  1 │ Architecture style           │ Microservices          │     │ 0100 │
+│  2 │ Inter-component comm         │ Async messaging        │  *  │ 0110 │
+│  3 │ External API style           │ not decided            │     │  —   │
+└────┴──────────────────────────────┴────────────────────────┴─────┴──────┘
+```
+
+The confirmation screen shows a per-section digest (answered / open / progress); `r` opens the full table above. There, a **row number is an address**: type `12` to change that one answer and come straight back — no second pass through the wizard. `o` walks only what's still open, `f` filters to open, `w` walks every section again. `Rec *` marks an answer that matches the recommendation, which is how you catch a run that accepted every default.
+
+Row numbers follow the catalog, so they're stable; changing an answer that gates others updates the table immediately and says how many questions appeared or disappeared.
 
 ### Unattended
 
@@ -160,7 +182,20 @@ specframe decide --yes -n                     # preview taking every recommendat
 
 Nothing already on disk moves. A document's number comes from the catalog, not from the order you answered in, so `R-0090` is `R-0090` whether it was written on day one or a year later.
 
+`decide` shows the same review table, with the decisions already recorded dimmed: they're there for context, but a recorded decision is superseded by editing its ADR, not by re-answering it.
+
 Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — but only if you haven't edited them; if you have, the new version lands beside them as `.specframe-new`. An already-recorded decision is never silently rewritten: supersede its ADR instead.
+
+---
+
+## Reading it back
+
+```bash
+specframe review          # every decision this repo has recorded, as a table
+specframe review --open   # only what's still open
+```
+
+Reads `.specframe/manifest.json` and prints the section digest plus the full decision table — what was decided, which ADR carries it, and which answers merely took the recommendation. It's the one-command answer to "what did we agree on here", without opening thirty ADRs, and it writes nothing.
 
 ---
 

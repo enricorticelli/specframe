@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { manifestFromPlan, readManifest, sha256, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
+import { pad, theme } from './style.js';
 import {
   renderAdr,
   renderAdrIndex,
@@ -31,6 +32,26 @@ const FALLBACK_DATE = '2026-01-01';
 
 export function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Every file the CLI touches is reported on one line, and a run writes dozens of
+// them. Colouring the verb and aligning the paths is what turns that wall into
+// something you can skim for the two lines that are not `[write]`.
+const ACTION_TONE = {
+  write: 'good',
+  update: 'good',
+  ok: 'muted',
+  skip: 'muted',
+  keep: 'warn',
+  orphan: 'warn',
+  conflict: 'bad',
+  remove: 'bad',
+};
+
+function actionTag(label, { dryRun = false } = {}) {
+  const tone = theme[ACTION_TONE[label] ?? 'muted'];
+  const prefix = dryRun ? theme.muted('[dry-run] ') : '';
+  return prefix + pad(tone(`[${label}]`), 10);
 }
 
 const TEMPLATE_TARGETS = [
@@ -205,13 +226,13 @@ async function exists(filePath) {
 
 async function writeIfMissing(targetPath, content, targetDir) {
   if (await exists(targetPath)) {
-    console.log(`[skip] ${path.relative(targetDir, targetPath)}`);
+    console.log(`${actionTag('skip')}${theme.muted(path.relative(targetDir, targetPath))}`);
     return false;
   }
 
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, content, 'utf8');
-  console.log(`[write] ${path.relative(targetDir, targetPath)}`);
+  console.log(`${actionTag('write')}${path.relative(targetDir, targetPath)}`);
   return true;
 }
 
@@ -484,13 +505,12 @@ const ACTION_LABEL = {
 
 function reportAction(action, dryRun) {
   if (action.action === 'up-to-date') return; // nothing changed; stay quiet
-  const prefix = dryRun ? '[dry-run] ' : '';
   const label = ACTION_LABEL[action.action] ?? action.action;
   let suffix = '';
-  if (action.action === 'conflict') suffix = ` → wrote ${action.relpath}.specframe-new (yours kept)`;
+  if (action.action === 'conflict') suffix = ` ${theme.glyph.arrow} wrote ${action.relpath}.specframe-new (yours kept)`;
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
   if (action.action === 'orphan') suffix = ' (no longer generated — remove if unused)';
-  console.log(`${prefix}[${label}] ${action.relpath}${suffix}`);
+  console.log(`${actionTag(label, { dryRun })}${action.relpath}${theme.muted(suffix)}`);
 }
 
 // Remove specframe-managed artifacts from a repository, leaving it as if
@@ -517,9 +537,12 @@ export async function uninstallTemplateSet({ targetDir, purge = false, dryRun = 
         await rm(absPath, { force: true });
         await pruneEmptyDirs(path.dirname(absPath), targetDir);
       }
-      console.log(`${dryRun ? '[dry-run] ' : ''}[remove] ${action.relpath}`);
+      console.log(`${actionTag('remove', { dryRun })}${action.relpath}`);
     } else {
-      console.log(`${dryRun ? '[dry-run] ' : ''}[keep] ${action.relpath} (user-owned — use --purge to remove)`);
+      console.log(
+        `${actionTag('keep', { dryRun })}${action.relpath}` +
+          theme.muted(' (user-owned — use --purge to remove)'),
+      );
     }
   }
 
@@ -527,9 +550,9 @@ export async function uninstallTemplateSet({ targetDir, purge = false, dryRun = 
     const manifestPath = path.join(targetDir, MANIFEST_RELPATH);
     await rm(manifestPath, { force: true });
     await pruneEmptyDirs(path.dirname(manifestPath), targetDir);
-    console.log(`[remove] ${MANIFEST_RELPATH}`);
+    console.log(`${actionTag('remove')}${MANIFEST_RELPATH}`);
   } else {
-    console.log(`[dry-run] [remove] ${MANIFEST_RELPATH}`);
+    console.log(`${actionTag('remove', { dryRun: true })}${MANIFEST_RELPATH}`);
   }
 
   console.log(dryRun ? '\nDry run complete. Nothing was removed.' : '\nUninstall complete.');
