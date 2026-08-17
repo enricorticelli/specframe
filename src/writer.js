@@ -4,16 +4,38 @@ import { fileURLToPath } from 'node:url';
 
 import { manifestFromPlan, readManifest, sha256, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planUpdateActions, planUninstallActions } from './update.js';
+import { resolveDecisions } from './decisions/resolve.js';
+import {
+  renderAdr,
+  renderAdrIndex,
+  renderGlossaryGroup,
+  renderGlossaryIndex,
+  renderGuideline,
+  renderGuidelinesIndex,
+  renderOpenDecisions,
+  renderRule,
+  renderRulesIndex,
+  renderRunbook,
+  renderRunbookIndex,
+  renderTakenDecisions,
+} from './decisions/render.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const templateDir = path.join(__dirname, 'templates');
 
+// Date stamped into generated ADRs. It is stored in the manifest at init and
+// reused by every later `update`, so re-running the CLI never rewrites a date
+// and never produces a spurious content-hash change.
+const FALLBACK_DATE = '2026-01-01';
+
+export function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 const TEMPLATE_TARGETS = [
   { template: 'AGENTS.md.tpl', target: 'AGENTS.md' },
   { template: 'CLAUDE.md.tpl', target: 'CLAUDE.md' },
-  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md' },
-  { template: 'adr-0000-template.md.tpl', target: 'docs/adr/0000-template.md' },
   {
     template: 'copilot-instructions.md.tpl',
     target: '.github/copilot-instructions.md',
@@ -21,16 +43,43 @@ const TEMPLATE_TARGETS = [
   { template: 'pr-template.md.tpl', target: '.github/pull_request_template.md' },
 ];
 
+// Static scaffolding shared by both modes. A `section` marks a README whose
+// `{{index}}` placeholder is filled from the resolved decision set — empty in
+// blank mode, a table of generated documents in guided mode. `blankOnly` files
+// are worked examples: they teach the expected level of detail, and would be
+// noise next to real generated content.
 const CONTENT_TARGETS = [
-  { template: 'guidelines-readme.md.tpl', target: 'docs/guidelines/README.md' },
-  { template: 'guidelines-0000-template.md.tpl', target: 'docs/guidelines/0000-template.md' },
-  { template: 'rules-readme.md.tpl', target: 'docs/rules/README.md' },
+  { template: 'docs-readme.md.tpl', target: 'docs/README.md' },
+  { template: 'decisions.md.tpl', target: 'docs/DECISIONS.md', regenerable: true },
+
+  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md', section: 'adr', regenerable: true },
+  { template: 'adr-0000-template.md.tpl', target: 'docs/adr/0000-template.md' },
+  { template: 'adr-0001-decision-policy.md.tpl', target: 'docs/adr/0001-repository-decision-policy.md' },
+
+  { template: 'rules-readme.md.tpl', target: 'docs/rules/README.md', section: 'rules', regenerable: true },
   { template: 'rules-0000-template.md.tpl', target: 'docs/rules/0000-template.md' },
-  { template: 'runbook-readme.md.tpl', target: 'docs/runbook/README.md' },
+  { template: 'rules-0001-example.md.tpl', target: 'docs/rules/0001-example.md', blankOnly: true },
+
+  { template: 'guidelines-readme.md.tpl', target: 'docs/guidelines/README.md', section: 'guidelines', regenerable: true },
+  { template: 'guidelines-0000-template.md.tpl', target: 'docs/guidelines/0000-template.md' },
+  { template: 'guidelines-0001-example.md.tpl', target: 'docs/guidelines/0001-example.md', blankOnly: true },
+
+  { template: 'runbook-readme.md.tpl', target: 'docs/runbook/README.md', section: 'runbooks', regenerable: true },
   { template: 'runbook-0000-template.md.tpl', target: 'docs/runbook/0000-template.md' },
-  { template: 'glossary-readme.md.tpl', target: 'docs/glossary/README.md' },
+  { template: 'runbook-0001-example.md.tpl', target: 'docs/runbook/0001-example.md', blankOnly: true },
+
+  { template: 'glossary-readme.md.tpl', target: 'docs/glossary/README.md', section: 'glossary', regenerable: true },
   { template: 'glossary-0000-template.md.tpl', target: 'docs/glossary/0000-template.md' },
+  { template: 'glossary-0001-example.md.tpl', target: 'docs/glossary/0001-example.md', blankOnly: true },
 ];
+
+const SECTION_INDEX_RENDERERS = {
+  adr: renderAdrIndex,
+  rules: renderRulesIndex,
+  guidelines: renderGuidelinesIndex,
+  runbooks: renderRunbookIndex,
+  glossary: renderGlossaryIndex,
+};
 
 // Escape a value for a TOML double-quoted basic string.
 function tomlBasicString(value) {
@@ -133,10 +182,16 @@ const AGENT_TEMPLATES = {
   ],
 };
 
+// Substitute {{key}} for every key in `vars`. Placeholders with no matching key
+// are left in place: a generated document can legitimately contain one that a
+// later pass fills.
 function renderTemplate(templateText, vars) {
-  return templateText
-    .replaceAll('{{projectName}}', vars.projectName)
-    .replaceAll('{{packageManager}}', vars.packageManager);
+  let out = templateText;
+  for (const [key, value] of Object.entries(vars)) {
+    if (value === undefined || value === null) continue;
+    out = out.replaceAll(`{{${key}}}`, String(value));
+  }
+  return out;
 }
 
 async function exists(filePath) {
@@ -151,22 +206,13 @@ async function exists(filePath) {
 async function writeIfMissing(targetPath, content, targetDir) {
   if (await exists(targetPath)) {
     console.log(`[skip] ${path.relative(targetDir, targetPath)}`);
-    return;
+    return false;
   }
 
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, content, 'utf8');
   console.log(`[write] ${path.relative(targetDir, targetPath)}`);
-}
-
-async function resolveContentTemplatePath(templateFile, contentProfile) {
-  if (contentProfile && contentProfile !== 'empty') {
-    const profilePath = path.join(templateDir, 'content', contentProfile, templateFile);
-    if (await exists(profilePath)) {
-      return profilePath;
-    }
-  }
-  return path.join(templateDir, 'content', 'empty', templateFile);
+  return true;
 }
 
 async function buildAgentEntries({ targets, vars }) {
@@ -226,16 +272,71 @@ async function buildRulesEntries({ targets, vars }) {
   return entries;
 }
 
-// Render the full set of files this specframe version produces for the given
-// choices. Returns { relpath, content, managed } with forward-slash relpaths
-// (the manifest key form). Shared by `init` and `update`.
-export async function buildTemplatePlan({
-  projectName,
-  packageManager,
-  contentProfile = 'empty',
-  agentTargets = [],
-}) {
-  const vars = { projectName, packageManager };
+// Documents produced by the decisions taken. All user-owned: they are this
+// repository's decision log from the moment they are written, so `update` never
+// touches them.
+//
+// render.js fills only the placeholders a catalog option supplied; the global
+// ones ({{projectName}}, {{packageManager}}) are substituted here, so generated
+// documents and static templates go through the same final pass.
+function buildDecisionEntries(resolved, { vars }) {
+  const entries = [];
+  const add = (relpath, content) =>
+    entries.push({ relpath, content: renderTemplate(content, vars), managed: false });
+
+  for (const adr of resolved.adrs) add(adr.relpath, renderAdr(adr, { date: vars.initDate, resolved }));
+  for (const item of resolved.rules) add(item.relpath, renderRule(item));
+  for (const item of resolved.guidelines) add(item.relpath, renderGuideline(item));
+  for (const item of resolved.runbooks) add(item.relpath, renderRunbook(item));
+  for (const group of resolved.glossaryGroups) add(group.relpath, renderGlossaryGroup(group));
+
+  return entries;
+}
+
+// Normalise a config that may come from a v1 manifest (contentProfile, no mode).
+export function normalizeConfig(config = {}) {
+  const mode = config.mode === 'guided' ? 'guided' : 'blank';
+  const decisions = mode === 'guided' ? (config.decisions ?? {}) : {};
+
+  // Provenance is only meaningful for a decision that was recorded, and is
+  // pruned to those so a stale entry cannot change how anything renders.
+  const provenance = {};
+  for (const [id, source] of Object.entries(config.provenance ?? {})) {
+    if (decisions[id] !== undefined && source === 'detected') provenance[id] = source;
+  }
+
+  return {
+    configVersion: 2,
+    projectName: config.projectName,
+    packageManager: config.packageManager === 'pnpm' ? 'pnpm' : 'npm',
+    mode,
+    decisions,
+    provenance,
+    agentTargets: config.agentTargets ?? [],
+    initDate: config.initDate ?? FALLBACK_DATE,
+  };
+}
+
+/**
+ * Render the full set of files this specframe version produces for the given
+ * choices. Returns { relpath, content, managed } with forward-slash relpaths
+ * (the manifest key form), plus a non-persisted `regenerable` marker on the
+ * index files `specframe decide` refreshes. Shared by init, update and decide.
+ */
+export async function buildTemplatePlan(rawConfig = {}) {
+  const config = normalizeConfig(rawConfig);
+  const { projectName, packageManager, mode, decisions, provenance, agentTargets, initDate } = config;
+
+  const resolved = resolveDecisions({ mode, answers: decisions, provenance });
+
+  const vars = {
+    projectName,
+    packageManager,
+    initDate,
+    takenDecisions: renderTakenDecisions(resolved),
+    openDecisions: renderOpenDecisions(resolved),
+  };
+
   const plan = [];
 
   for (const item of TEMPLATE_TARGETS) {
@@ -244,10 +345,20 @@ export async function buildTemplatePlan({
   }
 
   for (const item of CONTENT_TARGETS) {
-    const templatePath = await resolveContentTemplatePath(item.template, contentProfile);
-    const templateText = await readFile(templatePath, 'utf8');
-    plan.push({ relpath: item.target, content: renderTemplate(templateText, vars), managed: false });
+    if (item.blankOnly && mode !== 'blank') continue;
+    const templateText = await readFile(path.join(templateDir, 'content', item.template), 'utf8');
+    const fileVars = item.section
+      ? { ...vars, index: SECTION_INDEX_RENDERERS[item.section](resolved) }
+      : vars;
+    plan.push({
+      relpath: item.target,
+      content: renderTemplate(templateText, fileVars),
+      managed: false,
+      ...(item.regenerable ? { regenerable: true } : {}),
+    });
   }
+
+  plan.push(...buildDecisionEntries(resolved, { vars }));
 
   if (agentTargets.length > 0) {
     plan.push(...(await buildAgentEntries({ targets: agentTargets, vars })));
@@ -262,15 +373,9 @@ function toAbsPath(targetDir, relpath) {
   return path.join(targetDir, ...relpath.split('/'));
 }
 
-export async function writeTemplateSet({
-  targetDir,
-  projectName,
-  packageManager,
-  contentProfile = 'empty',
-  agentTargets = [],
-  version,
-}) {
-  const config = { projectName, packageManager, contentProfile, agentTargets };
+export async function writeTemplateSet(rawConfig) {
+  const { targetDir, version } = rawConfig;
+  const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
 
   for (const entry of plan) {
@@ -278,6 +383,7 @@ export async function writeTemplateSet({
   }
 
   await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+  return plan;
 }
 
 // Hash whatever each planned file currently holds on disk; a missing file is
@@ -298,23 +404,60 @@ async function hashDiskFiles(targetDir, plan) {
 // artifacts are refreshed when untouched; user-edited managed files get a
 // `.specframe-new` sibling; user-owned files are never written. Returns the
 // list of actions taken so the CLI can report them.
-export async function updateTemplateSet({
-  targetDir,
-  projectName,
-  packageManager,
-  contentProfile = 'empty',
-  agentTargets = [],
-  version,
-  force = false,
-  dryRun = false,
-}) {
-  const config = { projectName, packageManager, contentProfile, agentTargets };
+export async function updateTemplateSet(rawConfig) {
+  const { targetDir, version, force = false, dryRun = false } = rawConfig;
+  const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
   const diskHashes = await hashDiskFiles(targetDir, plan);
 
   const actions = planUpdateActions({ plan, manifest, diskHashes, force });
 
+  await applyActions({ targetDir, actions, dryRun });
+
+  if (!dryRun) {
+    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+  }
+
+  return actions;
+}
+
+/**
+ * Record decisions in an already-scaffolded repository.
+ *
+ * New documents are created and nothing existing is overwritten — the decision
+ * log is the user's. The indexes and DECISIONS.md are the exception: they exist
+ * to describe the set, so leaving them stale would be worse than refreshing
+ * them. They are refreshed only when untouched since specframe wrote them,
+ * exactly like a managed file, and land as `.specframe-new` otherwise.
+ */
+export async function decideTemplateSet(rawConfig) {
+  const { targetDir, version, force = false, dryRun = false } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const plan = await buildTemplatePlan(config);
+  const manifest = await readManifest(targetDir);
+  const diskHashes = await hashDiskFiles(targetDir, plan);
+
+  // Treat the indexes as managed for this operation only; their recorded
+  // ownership in the manifest stays user-owned. Every other planned file keeps
+  // user ownership, so applyActions creates what is missing and leaves the rest.
+  const actions = planUpdateActions({
+    plan: plan.map((entry) => (entry.regenerable ? { ...entry, managed: true } : entry)),
+    manifest,
+    diskHashes,
+    force,
+  });
+
+  await applyActions({ targetDir, actions, dryRun });
+
+  if (!dryRun) {
+    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+  }
+
+  return actions;
+}
+
+async function applyActions({ targetDir, actions, dryRun }) {
   for (const action of actions) {
     const rel = action.relpath;
     if (!dryRun) {
@@ -328,12 +471,6 @@ export async function updateTemplateSet({
     }
     reportAction(action, dryRun);
   }
-
-  if (!dryRun) {
-    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
-  }
-
-  return actions;
 }
 
 const ACTION_LABEL = {

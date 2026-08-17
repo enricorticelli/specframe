@@ -16,10 +16,11 @@ Read-only agent. Explore the codebase and answer questions without modifying fil
 
 ## Reading order
 
-1. docs/adr/README.md
-2. docs/rules/README.md
-3. docs/guidelines/README.md
-4. docs/glossary/README.md (for unfamiliar terms)
+1. docs/README.md (how the decision log is organised)
+2. docs/adr/README.md
+3. docs/rules/README.md
+4. docs/guidelines/README.md
+5. docs/glossary/README.md (for unfamiliar terms)
 
 ## Output
 

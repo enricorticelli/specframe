@@ -13,7 +13,9 @@ Produce implementation plans. Do not implement.
 2. docs/rules/README.md (all enforced rules apply).
 3. docs/guidelines/README.md (relevant conventions).
 4. docs/glossary/README.md (for unfamiliar terms).
-5. Existing code in the areas to be changed.
+5. docs/DECISIONS.md — check whether this change depends on a decision that has
+   not been made yet.
+6. Existing code in the areas to be changed.
 
 ## Plan structure
 
@@ -30,3 +32,6 @@ Produce implementation plans. Do not implement.
 - Respect architectural boundaries defined by ADRs.
 - Flag any conflict with an existing rule or guideline.
 - If a new architectural choice appears, propose a new ADR.
+- If the plan requires an open decision from docs/DECISIONS.md, make that the
+  first step of the plan — state the options and the trade-off, and do not pick
+  one silently on the user's behalf.

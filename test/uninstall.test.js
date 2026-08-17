@@ -11,7 +11,8 @@ import { readManifest } from '../src/manifest.js';
 const CONFIG = {
   projectName: 'acme',
   packageManager: 'npm',
-  contentProfile: 'empty',
+  mode: 'blank',
+  initDate: '2026-08-17',
   agentTargets: ['claude'],
 };
 
