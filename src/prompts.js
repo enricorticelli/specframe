@@ -4,14 +4,29 @@ import { applyRecommendedDefaults } from './answers.js';
 import { GROUPS, decisionsForGroup, isRelevant } from './decisions/catalog.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import {
+  buildReview,
+  findReviewRow,
+  formatArtifactSummary,
+  formatReviewTable,
+  formatSectionDigest,
+  openDecisionIds,
+} from './review.js';
+import { terminalWidth, theme, wrapText } from './style.js';
+import {
   CONTROL,
   createReadlineIo,
+  formatBanner,
+  formatChoiceEcho,
+  formatError,
   formatGroupHeader,
+  formatKeys,
   formatOptions,
   formatQuestion,
+  formatSkipEcho,
   parseConfirmInput,
   parseGroupInput,
   parseQuestionInput,
+  parseReviewInput,
   parseTextInput,
 } from './tui.js';
 
@@ -47,6 +62,8 @@ const MODES = [
   },
 ];
 
+const PROMPT = () => `${theme.accent(theme.glyph.prompt)} `;
+
 function getCurrentRepoName() {
   const parts = process.cwd().split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || 'current-repo';
@@ -63,20 +80,33 @@ export function parseAgentTargets(value) {
     .filter((token) => VALID_AGENT_TARGETS.has(token));
 }
 
+function sectionTitle(text, { width = terminalWidth() } = {}) {
+  return `\n${theme.rule(width, text)}`;
+}
+
 // One numbered-choice prompt. Handles re-prompting on invalid input and on `?`
 // so callers only ever see a resolved outcome.
 async function askChoice(io, { header, options, multi = false, help, promptLabel }) {
   for (;;) {
     io.log(header);
-    const raw = await io.question(promptLabel);
+    const raw = await io.question(promptLabel ?? PROMPT());
     const result = parseQuestionInput(raw, { optionCount: options.length, multi });
 
     if (result.kind === CONTROL.HELP) {
-      io.log(help ? `\n${help}\n` : '\nNo further explanation available.\n');
+      const width = terminalWidth();
+      io.log('');
+      io.log(
+        help
+          ? wrapText(help, width, '  ')
+              .map((line) => theme.muted(line))
+              .join('\n')
+          : theme.muted('  No further explanation available.'),
+      );
+      io.log('');
       continue;
     }
     if (result.kind === CONTROL.INVALID) {
-      io.log(`\n  ${result.reason}. Type a number, or press enter to skip.\n`);
+      io.log(formatError(`${result.reason}. Type a number, or press enter to skip.`, { theme }));
       continue;
     }
     return result;
@@ -84,45 +114,48 @@ async function askChoice(io, { header, options, multi = false, help, promptLabel
 }
 
 async function askProjectBasics(io, seed) {
+  const width = terminalWidth();
   const defaultName = seed.projectName || getCurrentRepoName();
 
-  io.log('\n# Project name');
-  io.log('Used inside the generated documents as this repository\'s identifier.');
+  io.log(sectionTitle('Project', { width }));
+  io.log(theme.muted('  Used inside the generated documents as this repository\'s identifier.'));
+  io.log('');
   const projectName = parseTextInput(
-    await io.question(`> Project name (default: ${defaultName}): `),
+    await io.question(`${theme.accent(theme.glyph.prompt)} Project name ${theme.muted(`[enter = ${defaultName}]`)} `),
     defaultName,
   );
 
   const pmChoice = await askChoice(io, {
     header: [
+      sectionTitle('Package manager', { width }),
+      theme.muted('  Referenced in generated guidelines and sample commands.'),
       '',
-      '# Package manager',
-      'Referenced in generated guidelines and sample commands.',
+      formatOptions(PACKAGE_MANAGERS, { theme, width }),
       '',
-      formatOptions(PACKAGE_MANAGERS),
-      '',
+      formatKeys([['enter', 'npm'], ['?', 'why this matters']], { theme }),
     ].join('\n'),
     options: PACKAGE_MANAGERS,
     help: 'Only affects the commands quoted in generated documents.',
-    promptLabel: '> Package manager [enter = npm]: ',
   });
   const packageManager =
     pmChoice.kind === CONTROL.SELECT ? PACKAGE_MANAGERS[pmChoice.values[0] - 1].value : 'npm';
 
   const agentChoice = await askChoice(io, {
     header: [
+      sectionTitle('Agent assistants', { width }),
+      ...wrapText(
+        'AGENTS.md is always generated and covers most tools. These add each tool\'s native files on top. Pick any number, comma-separated.',
+        width,
+        '  ',
+      ).map((line) => theme.muted(line)),
       '',
-      '# Agent assistants',
-      'AGENTS.md is always generated and covers most tools. These add each tool\'s',
-      'native files on top. Pick any number, comma-separated.',
+      formatOptions(AGENT_TARGETS, { theme, width }),
       '',
-      formatOptions(AGENT_TARGETS),
-      '',
+      formatKeys([['1,2', 'pick several'], ['enter', 'none'], ['?', 'what each one gets']], { theme }),
     ].join('\n'),
     options: AGENT_TARGETS,
     multi: true,
     help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
-    promptLabel: '> Agents, e.g. "1,2" [enter = none]: ',
   });
   const agentTargets =
     agentChoice.kind === CONTROL.SELECT
@@ -133,19 +166,70 @@ async function askProjectBasics(io, seed) {
 }
 
 async function askMode(io) {
+  const width = terminalWidth();
   const choice = await askChoice(io, {
     header: [
+      sectionTitle('Onboarding mode', { width }),
       '',
-      '# Onboarding mode',
+      formatOptions(MODES, { theme, width }),
       '',
-      formatOptions(MODES),
-      '',
+      formatKeys([['enter', 'guided'], ['?', 'the difference in full']], { theme }),
     ].join('\n'),
     options: MODES,
     help: MODES.map((m) => `${m.label}\n  ${m.hint}`).join('\n\n'),
-    promptLabel: '> Mode [enter = guided]: ',
   });
   return choice.kind === CONTROL.SELECT ? MODES[choice.values[0] - 1].value : 'guided';
+}
+
+// Ask one decision and report what the answer means for the answers map, without
+// touching it. Shared by the wizard and by the review table's "change row 12",
+// so a decision is presented identically wherever you reach it from.
+async function askDecision(io, { decision, number, total, answers, lead = null }) {
+  const width = terminalWidth();
+  const current = answers[decision.id];
+  const currentOption = current ? decision.options.find((o) => o.value === current) : null;
+
+  const keys = formatKeys(
+    [
+      [`1-${decision.options.length}`, 'choose'],
+      currentOption ? ['enter', `keep ${currentOption.label}`] : ['enter', 'skip'],
+      currentOption ? ['x', 'reopen it'] : null,
+      ['?', 'why this matters'],
+      ['b', 'back'],
+    ],
+    { theme, indent: '  ', gap: 2 },
+  );
+
+  const trailer = formatKeys(
+    [
+      ['d', 'recommend the rest'],
+      ['a', 'skip the rest'],
+      ['q', 'quit'],
+    ],
+    { theme, indent: '  ', gap: 2 },
+  );
+
+  const header = [
+    lead ? `\n${theme.muted(lead)}` : null,
+    formatQuestion({ number, total, decision, theme, width, current }),
+    keys,
+    trailer,
+    '',
+  ]
+    .filter((part) => part !== null)
+    .join('\n');
+
+  return askChoice(io, {
+    header,
+    options: decision.options,
+    help: [
+      decision.help,
+      '',
+      decision.context,
+      '',
+      ...decision.options.map((o) => `${o.label}: ${o.statement}`),
+    ].join('\n'),
+  });
 }
 
 // The decision wizard. Returns the answers map, or null when the user quits.
@@ -186,15 +270,22 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
           total: groups.length,
           group,
           questionCount: relevant().length,
+          answered: relevant().filter((d) => answers[d.id] !== undefined).length,
+          theme,
         }),
       );
-      const gate = parseGroupInput(await io.question('> '));
+      const gate = parseGroupInput(await io.question(PROMPT()));
 
       if (gate.kind === CONTROL.HELP) {
         io.log('');
-        for (const decision of relevant()) io.log(`   · ${decision.question}  (${decision.help})`);
+        for (const decision of relevant()) {
+          const current = answers[decision.id];
+          const option = current ? decision.options.find((o) => o.value === current) : null;
+          const state = option ? theme.good(option.label) : theme.warn('not decided');
+          io.log(`   ${theme.muted(theme.glyph.bullet)} ${decision.question}  ${state}`);
+        }
       } else if (gate.kind === CONTROL.INVALID) {
-        io.log(`\n  ${gate.reason}.\n`);
+        io.log(formatError(`${gate.reason}.`, { theme }));
       } else if (gate.kind === CONTROL.QUIT) {
         return null;
       } else if (gate.kind === CONTROL.SKIP) {
@@ -227,26 +318,35 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
       if (!isRelevant(decision, answers)) continue;
 
       asked += 1;
-      const result = await askChoice(io, {
-        header: formatQuestion({ number: asked, total: relevantTotal(), decision }),
-        options: decision.options,
-        help: [
-          decision.help,
-          '',
-          decision.context,
-          '',
-          ...decision.options.map((o) => `${o.label}: ${o.statement}`),
-        ].join('\n'),
-        promptLabel: '> [enter = skip · s skip · b back · d recommend rest · a skip all · q quit] ',
+      const result = await askDecision(io, {
+        decision,
+        number: asked,
+        total: relevantTotal(),
+        answers,
       });
 
       if (result.kind === CONTROL.QUIT) return null;
       if (result.kind === CONTROL.SELECT) {
-        answers[decision.id] = decision.options[result.values[0] - 1].value;
+        const option = decision.options[result.values[0] - 1];
+        answers[decision.id] = option.value;
+        io.log(formatChoiceEcho(decision, option, { theme }));
+        continue;
+      }
+      if (result.kind === CONTROL.CLEAR) {
+        delete answers[decision.id];
+        io.log(formatSkipEcho('reopened — it will be listed in docs/DECISIONS.md', { theme }));
         continue;
       }
       if (result.kind === CONTROL.SKIP) {
-        delete answers[decision.id];
+        // Enter means "no change": it leaves an existing answer alone rather
+        // than silently discarding it on a second pass. `x` is how you reopen.
+        const current = answers[decision.id];
+        if (current === undefined) {
+          io.log(formatSkipEcho('left open', { theme }));
+        } else {
+          const option = decision.options.find((o) => o.value === current);
+          io.log(formatSkipEcho(`kept ${option?.label ?? current}`, { theme }));
+        }
         continue;
       }
       if (result.kind === CONTROL.BACK) {
@@ -282,16 +382,188 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
   return answers;
 }
 
-function logSummary(io, resolved) {
-  const s = summarize(resolved);
+/**
+ * The review table.
+ *
+ * The point of this screen is that a row number is an address: after thirty
+ * questions you fix answer twelve by typing 12, and you come straight back here.
+ * `w` still walks every section, because sometimes you do want another pass.
+ *
+ * @returns {{ action: 'back'|'walk', decisions: object }} or null when quitting.
+ */
+async function reviewScreen(io, { decisions, editable = null }) {
+  let answers = { ...decisions };
+  let openOnly = false;
+
+  for (;;) {
+    const width = terminalWidth();
+    const review = buildReview(answers);
+
+    io.log(sectionTitle('Answers', { width }));
+    io.log('');
+    io.log(formatReviewTable(review, { theme, width, editable, openOnly }));
+    io.log('');
+    io.log(
+      `  ${theme.bold(String(review.decided))} ${theme.muted('decided')}   ` +
+        `${review.open > 0 ? theme.warn(String(review.open)) : theme.bold('0')} ${theme.muted('open')}   ` +
+        `${theme.muted(theme.glyph.arrow)} ${formatArtifactSummary(review, { theme })}`,
+    );
+    io.log('');
+    io.log(
+      formatKeys(
+        [
+          [`1-${review.total}`, 'change that one'],
+          review.open > 0 ? ['o', `answer the ${review.open} still open`] : null,
+          ['f', openOnly ? 'show all' : 'show only open'],
+        ],
+        { theme },
+      ),
+    );
+    io.log(
+      formatKeys(
+        [
+          ['w', 'walk every section again'],
+          ['enter', 'back'],
+          ['q', 'quit'],
+        ],
+        { theme },
+      ),
+    );
+
+    const input = parseReviewInput(await io.question(PROMPT()), { total: review.total });
+
+    if (input.kind === CONTROL.QUIT) return null;
+    if (input.kind === 'back') return { action: 'back', decisions: answers };
+    if (input.kind === 'walk') return { action: 'walk', decisions: answers };
+
+    if (input.kind === CONTROL.INVALID) {
+      io.log(formatError(`${input.reason}.`, { theme }));
+      continue;
+    }
+
+    if (input.kind === CONTROL.HELP) {
+      io.log('');
+      io.log(
+        wrapText(
+          'Every decision that applies to this configuration is listed, open ones included. ' +
+            'Type a row number to change that single answer; the questions a new answer makes ' +
+            'relevant are added to the table, and the ones it retires disappear.',
+          width,
+          '  ',
+        )
+          .map((line) => theme.muted(line))
+          .join('\n'),
+      );
+      continue;
+    }
+
+    if (input.kind === 'filter') {
+      openOnly = !openOnly;
+      continue;
+    }
+
+    if (input.kind === 'open') {
+      const ids = openDecisionIds(review).filter((id) => !editable || editable.has(id));
+      if (ids.length === 0) {
+        io.log(formatError('Nothing left open that this run may answer.', { theme }));
+        continue;
+      }
+      const answered = await askDecisions(io, { seed: answers, only: ids });
+      if (answered === null) return null;
+      answers = answered;
+      continue;
+    }
+
+    if (input.kind === 'jump') {
+      const row = findReviewRow(review, input.index);
+      if (editable && !editable.has(row.decision.id)) {
+        io.log(
+          formatError(
+            `${row.decision.title} is already recorded. Supersede it by editing docs/adr/${row.decision.adr}-${row.decision.slug}.md.`,
+            { theme },
+          ),
+        );
+        continue;
+      }
+
+      const result = await askDecision(io, {
+        decision: row.decision,
+        number: row.index,
+        total: review.total,
+        answers,
+        lead: `Changing row ${row.index} ${theme.glyph.bullet} ${row.group?.title ?? ''}`.trim(),
+      });
+
+      if (result.kind === CONTROL.QUIT) return null;
+      if (result.kind === CONTROL.SELECT) {
+        const option = row.decision.options[result.values[0] - 1];
+        answers[row.decision.id] = option.value;
+        io.log(formatChoiceEcho(row.decision, option, { theme }));
+      } else if (result.kind === CONTROL.CLEAR) {
+        delete answers[row.decision.id];
+        io.log(formatSkipEcho('reopened', { theme }));
+      } else if (result.kind === CONTROL.DEFAULTS) {
+        // "The rest", from a review, means every decision still open — but never
+        // one this run is not allowed to answer.
+        answers = applyRecommendedDefaults(answers, editable ? { only: [...editable] } : {});
+        io.log(formatSkipEcho('every open decision took its recommended option', { theme }));
+      } else if (result.kind === CONTROL.SKIP_ALL || result.kind === CONTROL.BACK) {
+        io.log(formatSkipEcho('unchanged', { theme }));
+      } else {
+        io.log(formatSkipEcho('unchanged', { theme }));
+      }
+
+      // A new answer can open questions the old one had retired, or retire ones
+      // it had opened. Say so rather than letting the table silently grow.
+      const after = buildReview(answers);
+      const delta = after.total - review.total;
+      if (delta > 0) {
+        io.log(formatSkipEcho(`${delta} more question(s) now apply`, { theme }));
+      } else if (delta < 0) {
+        io.log(formatSkipEcho(`${-delta} question(s) no longer apply`, { theme }));
+      }
+    }
+  }
+}
+
+function logSummary(io, decisions, { width = terminalWidth() } = {}) {
+  const review = buildReview(decisions);
+  const s = summarize(review.resolved);
+
+  io.log(sectionTitle('Summary', { width }));
   io.log('');
-  io.log(`── Summary ${'─'.repeat(48)}`);
-  io.log(`   ${s.decided} decisions taken · ${s.open} left open`);
+  io.log(formatSectionDigest(review, { theme, width }));
+  io.log('');
   io.log(
-    `   → ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+    `  ${theme.bold(String(s.decided))} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
+      `${s.open > 0 ? theme.warn(String(s.open)) : theme.bold('0')} ${theme.muted('left open')}`,
+  );
+  io.log(
+    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
       `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
   );
-  if (s.open > 0) io.log(`   Open decisions are listed in docs/DECISIONS.md.`);
+  if (s.open > 0) {
+    io.log(`  ${theme.muted('Open decisions are listed in docs/DECISIONS.md.')}`);
+  }
+  io.log('');
+  return review;
+}
+
+// Blank mode writes no decisions, so its summary is a sentence, not a table.
+function logBlankSummary(io, { width = terminalWidth() } = {}) {
+  const resolved = resolveDecisions({ mode: 'blank', answers: {} });
+  const s = summarize(resolved);
+  io.log(sectionTitle('Summary', { width }));
+  io.log('');
+  io.log(
+    `  ${theme.bold('0')} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
+      `${theme.warn(String(s.open))} ${theme.muted('left open')}`,
+  );
+  io.log(
+    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+  );
+  io.log(`  ${theme.muted('Every decision is listed in docs/DECISIONS.md.')}`);
   io.log('');
 }
 
@@ -304,6 +576,7 @@ function logSummary(io, resolved) {
  * @param {string}   options.mode          when set, the mode question is not asked.
  * @param {string[]} options.only          restrict the wizard to these decision ids.
  * @param {boolean}  options.close         close the io when finished (default true).
+ * @param {string}   options.version       shown in the banner.
  * @returns config, or null when the user quits.
  */
 export async function askQuestions({
@@ -313,9 +586,11 @@ export async function askQuestions({
   only = null,
   close = true,
   basics = true,
+  version,
 } = {}) {
   try {
-    io.log('\nspecframe — decision-driven scaffolding for this repository.\n');
+    const width = terminalWidth();
+    io.log(formatBanner({ version, theme, width }));
 
     const projectSeed = { projectName: seed.projectName };
     const project = basics
@@ -329,10 +604,14 @@ export async function askQuestions({
     const mode = fixedMode ?? (await askMode(io));
 
     if (mode === 'blank') {
-      const resolved = resolveDecisions({ mode: 'blank', answers: {} });
-      logSummary(io, resolved);
+      logBlankSummary(io, { width });
       return { ...project, mode: 'blank', decisions: {} };
     }
+
+    // Only what this run may change: with `only` set (that is, `specframe
+    // decide`) the already-recorded decisions are shown for context but are not
+    // editable, because an ADR is superseded, not rewritten.
+    const editable = only ? new Set(only) : null;
 
     let decisions = seed.decisions ?? {};
     for (;;) {
@@ -340,19 +619,58 @@ export async function askQuestions({
       if (answered === null) return null;
       decisions = answered;
 
-      const resolved = resolveDecisions({ mode: 'guided', answers: decisions });
-      logSummary(io, resolved);
+      // Confirm/review loop: the review screen returns here rather than
+      // restarting the wizard, unless it is explicitly asked to walk again.
+      let walkAgain = false;
+      while (!walkAgain) {
+        const review = logSummary(io, decisions, { width });
+        io.log(
+          formatKeys(
+            [
+              ['enter', 'write it'],
+              ['r', `review the ${review.total} decisions`],
+              ['q', 'quit'],
+            ],
+            { theme },
+          ),
+        );
 
-      const confirm = parseConfirmInput(
-        await io.question('> [enter] write   [r] review answers   [q] quit: '),
-      );
-      if (confirm.kind === 'write') return { ...project, mode: 'guided', decisions };
-      if (confirm.kind === CONTROL.QUIT) return null;
-      if (confirm.kind === CONTROL.INVALID) io.log(`\n  ${confirm.reason}.\n`);
-      // 'review' falls through and runs the decision loop again, seeded with
-      // the answers already given.
+        const confirm = parseConfirmInput(await io.question(PROMPT()));
+
+        if (confirm.kind === 'write') return { ...project, mode: 'guided', decisions };
+        if (confirm.kind === CONTROL.QUIT) return null;
+        if (confirm.kind === CONTROL.INVALID) {
+          io.log(formatError(`${confirm.reason}.`, { theme }));
+          continue;
+        }
+
+        const reviewed = await reviewScreen(io, { decisions, editable });
+        if (reviewed === null) return null;
+        decisions = reviewed.decisions;
+        walkAgain = reviewed.action === 'walk';
+      }
     }
   } finally {
     if (close) io.close();
   }
+}
+
+/**
+ * The read-only review used by `specframe review`: the same table, without any
+ * prompting, so a recorded configuration can be read back in one command.
+ */
+export function renderReview(decisions, { width = terminalWidth(), openOnly = false } = {}) {
+  const review = buildReview(decisions);
+  const s = summarize(review.resolved);
+
+  return [
+    formatSectionDigest(review, { theme, width }),
+    '',
+    formatReviewTable(review, { theme, width, openOnly }),
+    '',
+    `  ${theme.bold(String(s.decided))} ${theme.muted('decisions taken')} ${theme.muted(theme.glyph.bullet)} ` +
+      `${s.open > 0 ? theme.warn(String(s.open)) : theme.bold('0')} ${theme.muted('left open')}`,
+    `  ${theme.muted(theme.glyph.arrow)} ${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+  ].join('\n');
 }

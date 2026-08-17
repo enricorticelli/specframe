@@ -8,8 +8,9 @@ import { isRelevant } from './decisions/catalog.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
-import { askQuestions, parseAgentTargets } from './prompts.js';
+import { askQuestions, parseAgentTargets, renderReview } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
+import { configureTheme, terminalWidth, theme } from './style.js';
 import {
   decideTemplateSet,
   normalizeConfig,
@@ -37,6 +38,8 @@ export function parseArgs(argv) {
     help: false,
     yes: false,
     detected: false,
+    noColor: false,
+    open: false,
   };
   let command = 'init';
   let commandSeen = false;
@@ -50,6 +53,8 @@ export function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') { flags.help = true; continue; }
     if (arg === '--yes' || arg === '-y') { flags.yes = true; continue; }
     if (arg === '--detected') { flags.detected = true; continue; }
+    if (arg === '--no-color' || arg === '--no-colour') { flags.noColor = true; continue; }
+    if (arg === '--open') { flags.open = true; continue; }
 
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
@@ -80,6 +85,7 @@ const HELP = `specframe — decision-driven scaffolding for AI-ready repositorie
 Usage:
   specframe [init] [options]     Scaffold context files at the repo root.
   specframe decide [options]     Record decisions still open in this repo.
+  specframe review [options]     Show the decisions recorded here, as a table.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -117,6 +123,9 @@ Decide options:
   -n, --dry-run    Show what would be written.
       --set / --answers / --preset / --yes / --detected  as for init.
 
+Review options:
+      --open       Only the decisions still open.
+
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
   -n, --dry-run    Show what would change without writing anything.
@@ -127,6 +136,8 @@ Uninstall options:
 
 Common options:
   -h, --help       Show this help.
+      --no-color   Plain output. NO_COLOR=1 and a non-TTY do the same;
+                   SPECFRAME_ASCII=1 also drops the box drawing.
 
 Presets:
 ${PRESET_IDS.map((id) => `  ${id.padEnd(9)} ${PRESETS[id].description}`).join('\n')}
@@ -137,9 +148,9 @@ A managed file you edited by hand is kept; the new version lands beside it as
 
 function reportInvalidAnswers(invalid) {
   if (invalid.length === 0) return;
-  console.warn('\nIgnoring answers that do not match the decision catalog:');
+  console.warn(theme.warn('\nIgnoring answers that do not match the decision catalog:'));
   for (const { id, value, reason } of invalid) {
-    console.warn(`  ${id}=${value} — ${reason}`);
+    console.warn(`  ${theme.bold(`${id}=${value}`)} ${theme.muted(`— ${reason}`)}`);
   }
   console.warn('');
 }
@@ -152,9 +163,13 @@ function currentDirName(cwd) {
 function logPlanSummary(resolved) {
   const s = summarize(resolved);
   console.log(
-    `\n${s.decided} decisions recorded · ${s.open} open · ` +
-      `${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
-      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+    `\n${theme.bold(String(s.decided))} ${theme.muted('decisions recorded')} ${theme.muted(theme.glyph.bullet)} ` +
+      `${s.open > 0 ? theme.warn(String(s.open)) : theme.bold('0')} ${theme.muted('open')} ` +
+      `${theme.muted(theme.glyph.bullet)} ` +
+      theme.muted(
+        `${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+          `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+      ),
   );
 }
 
@@ -213,9 +228,10 @@ async function runInit(cwd, version, flags) {
         decisions: valid,
       },
       mode,
+      version,
     });
     if (answers === null) {
-      console.log('\nCancelled. Nothing was written.');
+      console.log(theme.muted('\nCancelled. Nothing was written.'));
       return;
     }
     config = answers;
@@ -229,11 +245,12 @@ async function runInit(cwd, version, flags) {
   console.log('');
 
   await writeTemplateSet({ targetDir, ...full, version });
-  console.log(`\nDone. Context files are ready in: ${targetDir}`);
+  console.log(`\n${theme.good('Done.')} Context files are ready in: ${theme.bold(targetDir)}`);
+  console.log(theme.muted(`Run \`specframe review\` to see the decisions recorded here as a table.`));
   if (full.mode === 'blank') {
-    console.log('Open docs/README.md to see how the sections fit together,');
-    console.log('and docs/DECISIONS.md for the decisions still to make.');
-    console.log('Run `specframe decide` when you want to record some of them.');
+    console.log(theme.muted('Open docs/README.md to see how the sections fit together,'));
+    console.log(theme.muted('and docs/DECISIONS.md for the decisions still to make.'));
+    console.log(theme.muted('Run `specframe decide` when you want to record some of them.'));
   }
 }
 
@@ -291,15 +308,18 @@ async function runDecide(cwd, version, flags) {
       );
     }
   } else {
-    console.log(`\n${openIds.length} decisions are still open in this repository.`);
+    console.log(
+      `\n${theme.warn(String(openIds.length))} ${theme.muted('decisions are still open in this repository.')}`,
+    );
     const answered = await askQuestions({
       seed: { ...stored, decisions: { ...stored.decisions, ...fresh } },
       mode: 'guided',
       only: openIds,
       basics: false,
+      version,
     });
     if (answered === null) {
-      console.log('\nCancelled. Nothing was written.');
+      console.log(theme.muted('\nCancelled. Nothing was written.'));
       return;
     }
     decisions = answered.decisions;
@@ -307,7 +327,7 @@ async function runDecide(cwd, version, flags) {
 
   const newlyDecided = Object.keys(decisions).filter((id) => stored.decisions[id] === undefined);
   if (newlyDecided.length === 0) {
-    console.log('\nNo new decisions were recorded. Nothing was written.');
+    console.log(theme.muted('\nNo new decisions were recorded. Nothing was written.'));
     return;
   }
 
@@ -324,6 +344,44 @@ async function runDecide(cwd, version, flags) {
   logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));
   console.log(
     flags.dryRun ? '\nDry run complete. Nothing was written.' : `\nRecorded ${newlyDecided.length} decisions.`,
+  );
+}
+
+// Read back what this repository has decided, as the same table the wizard
+// shows. It answers the question a scaffolded repo raises months later — "what
+// did we actually agree, and what is still open" — without opening 30 ADRs.
+async function runReview(cwd, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `review` reads the decisions it recorded.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  const width = terminalWidth();
+
+  console.log('');
+  console.log(theme.rule(width, stored.projectName ?? 'specframe'));
+  console.log(
+    theme.muted(
+      `  mode ${stored.mode ?? 'unknown'} ${theme.glyph.bullet} scaffolded with specframe ` +
+        `${manifest.version ?? 'unknown'} ${theme.glyph.bullet} ${stored.initDate ?? 'unknown date'}`,
+    ),
+  );
+  console.log('');
+  console.log(renderReview(stored.decisions ?? {}, { width, openOnly: flags.open }));
+  console.log('');
+
+  const open = summarize(resolveDecisions({ mode: 'guided', answers: stored.decisions ?? {} })).open;
+  console.log(
+    theme.muted(
+      open > 0
+        ? '  `specframe decide` records the open ones.'
+        : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
+    ),
   );
 }
 
@@ -419,6 +477,10 @@ export async function run(argv = process.argv.slice(2)) {
   const cwd = process.cwd();
   const version = await getVersion();
 
+  // `--no-color` has to be honoured before anything is printed, and it only
+  // turns colour off: a flag cannot force it on where the terminal says no.
+  if (flags.noColor) configureTheme({ color: false });
+
   if (flags.help || command === 'help') {
     console.log(HELP);
     return;
@@ -426,6 +488,11 @@ export async function run(argv = process.argv.slice(2)) {
 
   if (command === 'decide') {
     await runDecide(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'review') {
+    await runReview(cwd, flags);
     return;
   }
 

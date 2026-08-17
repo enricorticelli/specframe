@@ -63,7 +63,7 @@ test('back at the first question of a group re-asks that question', async () => 
   assert.equal(config.decisions['architecture-style'], 'service-based');
 });
 
-test('skipping a single question clears it rather than defaulting it', async () => {
+test('skipping an unanswered question leaves it open rather than defaulting it', async () => {
   const config = await run(['', 's', 'a']);
   assert.equal(config.decisions['architecture-style'], undefined);
 });
@@ -94,10 +94,57 @@ test('help does not consume the answer', async () => {
   assert.equal(config.decisions['architecture-style'], 'monolith');
 });
 
-test('review runs the loop again, seeded with the answers already given', async () => {
-  // Stop, ask to review, then change the architecture and stop again.
-  const config = await run(['a', 'r', '', '1', 'a']);
+// --- review -----------------------------------------------------------------
+
+test('review changes one answer by its row number, without another pass', async () => {
+  // Stop, review, change row 1, take its first option, back, write.
+  const config = await run(['a', 'r', '1', '1', '', '']);
   assert.equal(config.decisions['architecture-style'], 'monolith');
+});
+
+test('review can still walk every section again', async () => {
+  const config = await run(['a', 'r', 'w', '', '1', 'a']);
+  assert.equal(config.decisions['architecture-style'], 'monolith');
+});
+
+test('review answers only what is open when asked to', async () => {
+  const config = await run(['a', 'r', 'o', '', '1', 'a']);
+  assert.equal(config.decisions['architecture-style'], 'monolith');
+});
+
+test('review shows every decision that applies, open ones included', async () => {
+  const io = createScriptedIo(['a', 'r', '', '']);
+  await askQuestions({ io, seed, mode: 'guided', basics: false });
+  const text = io.output.join('\n');
+  assert.match(text, /Architecture/, 'sections are named');
+  assert.match(text, /Architecture style/, 'decisions are listed by title');
+  assert.match(text, /not decided/, 'an unanswered decision says so');
+});
+
+test('review reports a row that does not exist rather than guessing', async () => {
+  const io = createScriptedIo(['a', 'r', '999', '', '']);
+  await askQuestions({ io, seed, mode: 'guided', basics: false });
+  assert.ok(io.output.some((line) => /no row 999/.test(line)), 'the reason was shown');
+});
+
+test('a taken decision shows in the table with its ADR number', async () => {
+  const io = createScriptedIo(['d', 'r', '', '']);
+  await askQuestions({ io, seed, mode: 'guided', basics: false });
+  const text = io.output.join('\n');
+  assert.match(text, /ADR-0100|0100/, 'the ADR the decision produces');
+});
+
+// --- keeping and reopening --------------------------------------------------
+
+test('enter keeps an answer already given instead of discarding it', async () => {
+  // Answer, go back to the same question, press enter: the answer survives.
+  const config = await run(['', '1', 'b', '', 'a']);
+  assert.equal(config.decisions['architecture-style'], 'monolith');
+});
+
+test('x reopens a decision already answered', async () => {
+  const config = await run(['', '1', 'b', 'x', 'a']);
+  assert.equal(config.decisions['architecture-style'], undefined);
 });
 
 test('blank mode asks no decisions at all', async () => {
@@ -118,6 +165,23 @@ test('the wizard can be limited to a subset, for `specframe decide`', async () =
   assert.equal(config.decisions.tdd, 'strict', 'the only question asked');
   assert.equal(config.decisions['clean-code'], 'yes', 'existing answers are preserved');
   assert.equal(config.decisions['architecture-style'], undefined, 'out of scope, never asked');
+});
+
+test('a decision outside this run cannot be re-answered from the review table', async () => {
+  // `specframe decide` reopens only what is still open. Row 1 here is a decision
+  // already recorded, so the table refuses it and points at its ADR.
+  const io = createScriptedIo(['a', 'r', '1', '', '']);
+  const config = await askQuestions({
+    io,
+    seed: { ...seed, decisions: { 'architecture-style': 'monolith' } },
+    mode: 'guided',
+    basics: false,
+    only: ['tdd'],
+  });
+  const text = io.output.join('\n');
+  assert.match(text, /already recorded/);
+  assert.match(text, /docs\/adr\/0100-architecture-style\.md/, 'and how to supersede it');
+  assert.equal(config.decisions['architecture-style'], 'monolith', 'left untouched');
 });
 
 test('the summary reports what will be written', async () => {
