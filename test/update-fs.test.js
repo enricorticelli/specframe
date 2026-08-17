@@ -45,6 +45,7 @@ test('init writes a manifest capturing version and config', async () => {
       configVersion: 2,
       decisions: {},
       provenance: {},
+      revisions: {},
     });
     assert.ok(manifest.files[EXPLORER].managed, 'explorer is managed');
     assert.equal(manifest.files[CLAUDE_MD].managed, false, 'CLAUDE.md is user-owned');

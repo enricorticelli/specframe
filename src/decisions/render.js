@@ -57,11 +57,17 @@ function derivedFor(resolved, adrNumber) {
 export function renderAdr(adr, { date, resolved }) {
   const { decision, option, alternatives, number, relpath, provenance } = adr;
   const detected = provenance === 'detected';
+  const revisions = adr.revisions ?? [];
+  const revisedOn = revisions.length > 0 ? revisions[revisions.length - 1].date : null;
   const lines = [];
 
   lines.push(`# ADR-${number}: ${decision.title}`, '');
   lines.push('- Status: accepted');
   lines.push(`- Date: ${date}${detected ? ' (recorded, not decided — see Context)' : ''}`);
+  // A revised ADR must say so in its header: the Decision section below is the
+  // current one, and a reader who remembers the old answer needs to know the
+  // document changed under them rather than assume they misremembered.
+  if (revisedOn) lines.push(`- Revised: ${revisedOn} (see History)`);
   lines.push(`- Decision key: \`${decision.id}\` = \`${option.value}\``);
   if (detected) lines.push('- Recorded from: the existing implementation');
   lines.push('');
@@ -129,9 +135,27 @@ export function renderAdr(adr, { date, resolved }) {
     lines.push('');
   }
 
+  if (revisions.length > 0) {
+    // Newest first: the most recent thing this decision used to be is the one a
+    // reader is most likely to be holding in their head.
+    lines.push('## History', '');
+    for (const entry of [...revisions].reverse()) {
+      const label = entry.option ? `**${entry.option.label}**` : `\`${entry.value}\``;
+      const why = entry.option?.tradeoff ? ` ${entry.option.tradeoff}` : '';
+      lines.push(`- Until ${entry.date} this decision was ${label}.${why}`);
+    }
+    lines.push(
+      '',
+      '<!-- Why it changed is the part no tool can fill in. Add it here: the next',
+      '     person to propose changing it back will read this first. -->',
+      '',
+    );
+  }
+
   lines.push(
-    '<!-- Superseding this decision: set Status to superseded, link the ADR that',
-    '     replaces it, and revisit the documents listed above. -->',
+    `<!-- To change this decision, run \`specframe revise ${decision.id}\`: it records`,
+    '     the old choice under History, refreshes the documents listed above, and',
+    '     reports the ones this decision no longer implies. -->',
     '',
   );
 

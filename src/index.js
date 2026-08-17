@@ -3,17 +3,25 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { applyRecommendedDefaults, collectAnswerSources, validateAnswers } from './answers.js';
-import { isRelevant } from './decisions/catalog.js';
+import {
+  applyRecommendedDefaults,
+  collectAnswerSources,
+  parseSetFlag,
+  validateAnswers,
+} from './answers.js';
+import { getDecision, isRelevant } from './decisions/catalog.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
-import { askQuestions, parseAgentTargets, renderReview } from './prompts.js';
+import { askQuestions, askRevision, parseAgentTargets, renderReview } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
+import { diffAnswers } from './review.js';
 import { configureTheme, terminalWidth, theme } from './style.js';
 import {
   decideTemplateSet,
   normalizeConfig,
+  planRevisionEffects,
+  reviseTemplateSet,
   today,
   uninstallTemplateSet,
   updateTemplateSet,
@@ -74,7 +82,13 @@ export function parseArgs(argv) {
     if (!commandSeen) {
       command = arg;
       commandSeen = true;
+      continue;
     }
+
+    // A second bare argument is the command's subject — today only
+    // `revise <decision-id>`. Kept as the first one wins, so a stray third
+    // argument cannot quietly redirect the command.
+    if (flags.target === undefined) flags.target = arg;
   }
 
   return { command, flags };
@@ -86,6 +100,7 @@ Usage:
   specframe [init] [options]     Scaffold context files at the repo root.
   specframe decide [options]     Record decisions still open in this repo.
   specframe review [options]     Show the decisions recorded here, as a table.
+  specframe revise [id]          Change a decision already recorded.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -96,8 +111,9 @@ Init has two modes:
   blank    Every template plus its filling instructions, and the full decision
            backlog in docs/DECISIONS.md. No decisions taken.
   guided   Answer decisions from the catalog. Each one becomes an ADR plus the
-           rules, guidelines, runbooks and glossary terms it implies. Skipping
-           is one key per question, or per section.
+           rules, guidelines, runbooks and glossary terms it implies. Enter
+           takes the recommended option; s leaves a question, or a whole
+           section, open. Nothing is written before you see the review table.
 
 Init options:
       --preset <id>   ${PRESET_IDS.join(' | ')}
@@ -125,6 +141,17 @@ Decide options:
 
 Review options:
       --open       Only the decisions still open.
+
+Revise options:
+      --set k=v,...  Revise without prompting, e.g.
+                     --set architecture-style=microservices
+  -n, --dry-run      Show what would change without writing anything.
+  -f, --force        Rewrite a revised document even if you edited it.
+
+The ADR keeps its number and gains a History section naming what the decision
+used to be. Documents the new answer no longer implies are reported, never
+deleted. A document you edited by hand is kept, with the new version beside it
+as <file>.specframe-new.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -385,6 +412,164 @@ async function runReview(cwd, flags) {
   );
 }
 
+/**
+ * Change a decision this repository has already recorded.
+ *
+ * The ADR keeps its number — it is *the* record for this decision, and the
+ * catalog's numbering promise says 0100 is architecture-style forever — and gains
+ * a History section naming what it used to be. Documents the new answer no longer
+ * implies are reported, never deleted: they are the user's, and a rule someone
+ * extended by hand outnumbers the tidiness of removing it.
+ */
+async function runRevise(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `revise` changes decisions it recorded.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  if (Object.keys(stored.decisions).length === 0) {
+    throw new Error(
+      'No decisions are recorded in this repository yet.\n' +
+        'Run `specframe decide` to record some — `revise` changes existing ones.',
+    );
+  }
+
+  const target = flags.target ?? null;
+  if (target && !getDecision(target)) {
+    throw new Error(
+      `Unknown decision: ${target}\n` +
+        'Run `specframe review` to see the decisions this repository records.',
+    );
+  }
+
+  // Non-interactive revision, for scripts and for the agents: `--set` names the
+  // new values directly.
+  let decisions;
+  if (flags.set) {
+    const { valid, invalid } = validateAnswers(parseSetFlag(flags.set));
+    reportInvalidAnswers(invalid);
+    if (Object.keys(valid).length === 0) {
+      throw new Error('--set named no decision this catalog knows. Nothing to revise.');
+    }
+    decisions = { ...stored.decisions, ...valid };
+  } else if (!process.stdin.isTTY) {
+    throw new Error(
+      'Not running on a terminal, so there is nothing to revise interactively.\n' +
+        'Pass --set decision-id=option-value.',
+    );
+  } else {
+    const answered = await askRevision({
+      decisions: stored.decisions,
+      target,
+      version,
+    });
+    if (answered === null) {
+      console.log(theme.muted('\nCancelled. Nothing was written.'));
+      return;
+    }
+    decisions = answered;
+  }
+
+  // `--set` can name a decision this configuration has gated off — contract
+  // testing in a monolith, say. Recording it would put a value in the manifest
+  // that no ADR renders and no document reflects, so it is dropped out loud
+  // rather than kept as a fact nothing on disk agrees with.
+  const notApplicable = new Set(
+    resolveDecisions({ mode: 'guided', answers: decisions }).notApplicable.map(
+      (entry) => entry.decision.id,
+    ),
+  );
+  if (notApplicable.size > 0) {
+    const dropped = [...notApplicable].filter((id) => decisions[id] !== stored.decisions[id]);
+    if (dropped.length > 0) {
+      console.warn(
+        theme.warn(`\nIgnoring decisions that do not apply to this configuration: ${dropped.join(', ')}`),
+      );
+      console.warn(theme.muted('An earlier answer retires them — revise that one first.\n'));
+    }
+    decisions = Object.fromEntries(
+      Object.entries(decisions).filter(([id]) => !notApplicable.has(id) || stored.decisions[id] !== undefined),
+    );
+  }
+
+  const changes = diffAnswers(stored.decisions, decisions);
+  if (changes.length === 0) {
+    console.log(theme.muted('\nNo decision changed. Nothing was written.'));
+    return;
+  }
+
+  // History gets the value being replaced, dated today. A decision recorded for
+  // the first time has no history to write; one that was reopened keeps the
+  // history it had, so re-answering it later still shows the whole chain.
+  const revisions = { ...stored.revisions };
+  for (const change of changes) {
+    if (change.kind !== 'changed') continue;
+    const previous = revisions[change.decision.id] ?? [];
+    revisions[change.decision.id] = [...previous, { date: today(), value: change.fromValue }];
+  }
+
+  const config = { ...stored, mode: 'guided', decisions, revisions };
+  const before = resolveDecisions({ mode: 'guided', answers: stored.decisions, provenance: stored.provenance });
+  const after = resolveDecisions({ mode: 'guided', answers: decisions, provenance: stored.provenance });
+  const effects = planRevisionEffects({ before, after });
+
+  console.log('');
+  await reviseTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+
+  const plural = (n, one, many) => (n === 1 ? one : many);
+
+  if (effects.added.length > 0) {
+    console.log(
+      `\n${theme.good(String(effects.added.length))} ` +
+        theme.muted(
+          `${plural(effects.added.length, 'document is', 'documents are')} new for these answers.`,
+        ),
+    );
+  }
+  if (effects.orphaned.length > 0) {
+    console.log(
+      `\n${theme.warn(String(effects.orphaned.length))} ` +
+        theme.muted(
+          `${plural(effects.orphaned.length, 'document is', 'documents are')} no longer implied by any decision.`,
+        ),
+    );
+    console.log(
+      theme.muted('Left in place — these files are yours; remove them if nothing depends on them:'),
+    );
+    for (const doc of effects.orphaned) {
+      console.log(`  ${theme.warn(theme.glyph.bullet)} ${doc.relpath} ${theme.muted(`— ${doc.title}`)}`);
+    }
+  }
+
+  // A revision can make questions relevant that the old answer had retired —
+  // choosing microservices opens every question about distribution. Saying so is
+  // the difference between an incomplete decision log and one nobody knows is
+  // incomplete.
+  const opened = after.open.length - before.open.length;
+  if (opened > 0) {
+    console.log(
+      `\n${theme.warn(String(opened))} ` +
+        theme.muted(
+          `${plural(opened, 'decision is', 'decisions are')} now relevant that the old answer had ` +
+            'retired. Run `specframe decide` to record them.',
+        ),
+    );
+  }
+
+  logPlanSummary(after);
+  console.log(
+    flags.dryRun
+      ? theme.muted('\nDry run complete. Nothing was written.')
+      : `\n${theme.good(`Revised ${changes.length} decision${changes.length === 1 ? '' : 's'}.`)} ` +
+          theme.muted('Each ADR records what it used to be, under History.'),
+  );
+}
+
 async function runUpdate(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
   const manifest = await readManifest(targetDir);
@@ -493,6 +678,11 @@ export async function run(argv = process.argv.slice(2)) {
 
   if (command === 'review') {
     await runReview(cwd, flags);
+    return;
+  }
+
+  if (command === 'revise') {
+    await runRevise(cwd, version, flags);
     return;
   }
 

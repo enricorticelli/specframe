@@ -6,16 +6,23 @@
 // The shortcut vocabulary is the same at every prompt, because the wizard is
 // long enough that having to remember two sets would be worse than having none:
 //
-//   <empty>  no change (skip an unanswered question, keep an answered one,
-//            enter a group)
+//   <empty>  accept: take the recommended option, or keep the answer already
+//            given; at a section header, answer its questions
 //   1 2 3    choose by number ("1,3" or "1 3" where several are allowed)
-//   s        skip
-//   x        reopen a decision already answered
-//   a        skip everything remaining
+//   s        leave it open — the one way to *not* record an answer
+//   a        leave everything remaining open
 //   d        accept the recommended option for everything remaining
 //   b        go back one question
 //   ?        show the long explanation
 //   q        quit without writing
+//
+// Enter takes the recommendation rather than skipping. It is the convention
+// every other prompt in the world follows, and a wizard that quietly means the
+// opposite reads as broken: the first person through it pressed enter forty
+// times and reached the summary with nothing recorded. Not recording an answer
+// is the deliberate act now, and it has its own key. What keeps that safe is
+// that every accepted answer is echoed with the ADR it produces, and the review
+// table marks which ones merely took the recommendation.
 //
 // Formatting lives here too, and it is styled through the shared theme rather
 // than with hard-coded escapes. Colour carries no information — with it off the
@@ -26,14 +33,14 @@
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
-import { terminalWidth, theme as defaultTheme, visibleWidth, wrapText } from './style.js';
+import { terminalWidth, theme as defaultTheme, truncate, visibleWidth, wrapText } from './style.js';
 
 export const CONTROL = {
+  ACCEPT: 'accept',
   SKIP: 'skip',
   SKIP_ALL: 'skip-all',
   DEFAULTS: 'defaults',
   BACK: 'back',
-  CLEAR: 'clear',
   HELP: 'help',
   QUIT: 'quit',
   SELECT: 'select',
@@ -44,9 +51,7 @@ export const CONTROL = {
 const CONTROL_WORDS = new Map([
   ['s', CONTROL.SKIP],
   ['skip', CONTROL.SKIP],
-  ['x', CONTROL.CLEAR],
-  ['clear', CONTROL.CLEAR],
-  ['reopen', CONTROL.CLEAR],
+  ['open', CONTROL.SKIP],
   ['a', CONTROL.SKIP_ALL],
   ['all', CONTROL.SKIP_ALL],
   ['d', CONTROL.DEFAULTS],
@@ -66,9 +71,13 @@ const CONTROL_WORDS = new Map([
 // Returns { kind } for a control word, or { kind: 'select', values: number[] }
 // with 1-based indices already validated against optionCount. `multi: false`
 // rejects more than one index rather than silently taking the first.
+//
+// Empty is ACCEPT, not SKIP: what "accept" resolves to is the caller's business
+// (the recommendation, the answer already given, or a fixed default), because
+// only the caller knows what it is offering.
 export function parseQuestionInput(raw, { optionCount, multi = false } = {}) {
   const input = (raw ?? '').trim();
-  if (input === '') return { kind: CONTROL.SKIP };
+  if (input === '') return { kind: CONTROL.ACCEPT };
 
   const word = CONTROL_WORDS.get(input.toLowerCase());
   if (word) return { kind: word };
@@ -100,9 +109,6 @@ export function parseGroupInput(raw) {
 
   const word = CONTROL_WORDS.get(input.toLowerCase());
   if (word === CONTROL.BACK) return { kind: CONTROL.INVALID, reason: 'nothing to go back to' };
-  if (word === CONTROL.CLEAR) {
-    return { kind: CONTROL.INVALID, reason: 'reopening applies to one decision, not a section' };
-  }
   if (word) return { kind: word };
 
   return { kind: CONTROL.INVALID, reason: `unrecognised: ${input}` };
@@ -155,14 +161,34 @@ export function parseTextInput(raw, fallback) {
 
 // Shortcut hints. The key is coloured and the meaning is not, so a row of them
 // scans as a keyboard, and with colour off it still reads as prose.
-export function formatKeys(pairs, { theme = defaultTheme, indent = '  ', gap = 3 } = {}) {
-  return (
-    indent +
-    pairs
-      .filter(Boolean)
-      .map(([key, meaning]) => `${theme.key(`[${key}]`)} ${theme.muted(meaning)}`)
-      .join(' '.repeat(gap))
-  );
+//
+// They pack themselves into as many lines as the terminal needs. Hard-coding the
+// line breaks meant either hints too terse to be read or a row that wrapped
+// mid-key on a narrow window — and these hints are the one place where being
+// read matters most: they are what tells you enter is about to answer.
+export function formatKeys(
+  pairs,
+  { theme = defaultTheme, indent = '  ', gap = 3, width = terminalWidth() } = {},
+) {
+  const items = pairs
+    .filter(Boolean)
+    .map(([key, meaning]) => `${theme.key(`[${key}]`)} ${theme.muted(meaning)}`);
+
+  const lines = [];
+  let line = '';
+  for (const item of items) {
+    if (line === '') {
+      line = item;
+    } else if (visibleWidth(indent) + visibleWidth(line) + gap + visibleWidth(item) <= width) {
+      line += ' '.repeat(gap) + item;
+    } else {
+      lines.push(indent + line);
+      line = item;
+    }
+  }
+  if (line !== '') lines.push(indent + line);
+
+  return lines.join('\n');
 }
 
 // Numbered option list. The recommendation is marked rather than pre-selected:
@@ -227,18 +253,13 @@ export function formatGroupHeader({
             ? `walk its ${questionCount} ${noun} (${answered} answered)`
             : `answer the ${questionCount} ${noun}`,
         ],
-        ['s', 'skip section'],
+        ['s', 'leave the section open'],
         ['?', 'list them'],
-      ],
-      { theme, indent: '   ' },
-    ),
-    formatKeys(
-      [
-        ['d', 'recommend everything remaining'],
-        ['a', 'skip everything remaining'],
+        ['d', 'take every recommendation from here'],
+        ['a', 'leave everything remaining open'],
         ['q', 'quit'],
       ],
-      { theme, indent: '   ' },
+      { theme, indent: '   ', width },
     ),
   ].join('\n');
 }
@@ -254,12 +275,18 @@ export function formatQuestion({
   const counter = `${theme.accent(String(number))}${theme.muted(`/${total}`)}`;
   const tag = `${theme.tag(`ADR-${decision.adr}`)} ${theme.muted(theme.glyph.bullet)}`;
 
+  // The ADR number sits on the first line of the help text, so the "why this
+  // matters" line and the document it will produce read as one thing. The tag
+  // occupies columns the help text cannot have, so it is wrapped against a
+  // hanging indent that lines the continuation up under the first word — wrap it
+  // against the full width and the first line runs off the terminal.
+  const hang = 6 + visibleWidth(`ADR-${decision.adr} ${theme.glyph.bullet} `);
+  const help = wrapText(decision.help, width, ' '.repeat(hang));
+
   return [
     '',
     `${counter}  ${theme.heading(decision.question)}`,
-    // The ADR number sits on the first line of the help text, so the "why this
-    // matters" line and the document it will produce read as one thing.
-    ...wrapText(decision.help, width, '      ').map((line, i) =>
+    ...help.map((line, i) =>
       i === 0 ? `      ${tag} ${theme.muted(line.trim())}` : theme.muted(line),
     ),
     '',
@@ -270,8 +297,20 @@ export function formatQuestion({
 
 // The line printed after an answer is taken. Cheap, and it turns the transcript
 // above the cursor into a readable log of the run instead of a wall of prompts.
-export function formatChoiceEcho(decision, option, { theme = defaultTheme } = {}) {
-  return `  ${theme.good(theme.glyph.check)} ${theme.good(option.label)} ${theme.muted(theme.glyph.bullet)} ${theme.muted(`ADR-${decision.adr}`)}`;
+// `note` is what makes `enter` honest: an answer that came from the
+// recommendation says so on the line that records it.
+export function formatChoiceEcho(
+  decision,
+  option,
+  { theme = defaultTheme, note = null, width = terminalWidth() } = {},
+) {
+  const bullet = theme.muted(theme.glyph.bullet);
+  const tail = `${bullet} ${theme.muted(`ADR-${decision.adr}`)}${note ? ` ${bullet} ${theme.muted(note)}` : ''}`;
+  // The ADR number is the part worth keeping on a narrow terminal: it is how you
+  // find the document this line just promised.
+  const room = width - visibleWidth(tail) - 6;
+  const label = truncate(option.label, Math.max(12, room), theme.glyph.ellipsis);
+  return `  ${theme.good(theme.glyph.check)} ${theme.good(label)} ${tail}`;
 }
 
 export function formatSkipEcho(text, { theme = defaultTheme } = {}) {
@@ -279,11 +318,13 @@ export function formatSkipEcho(text, { theme = defaultTheme } = {}) {
 }
 
 export function formatBanner({ version, theme = defaultTheme, width = terminalWidth() } = {}) {
-  const title = theme.brand('specframe');
-  const tail = version ? ` ${theme.muted(`v${version}`)}` : '';
+  const title = theme.brand('specframe') + (version ? ` ${theme.muted(`v${version}`)}` : '');
+  const tagline = 'decision-driven scaffolding for this repository';
+  const oneLine = `${title}  ${theme.muted(theme.glyph.bullet)} ${theme.muted(tagline)}`;
+
   return [
     '',
-    `${title}${tail}  ${theme.muted(theme.glyph.bullet)} ${theme.muted('decision-driven scaffolding for this repository')}`,
+    visibleWidth(oneLine) <= width ? oneLine : `${title}\n${theme.muted(tagline)}`,
     theme.rule(width),
   ].join('\n');
 }

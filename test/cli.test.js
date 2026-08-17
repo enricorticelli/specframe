@@ -53,3 +53,18 @@ test('the command is taken from the first bare argument only', () => {
   assert.equal(command, 'decide');
   assert.equal(flags.set, 'tdd=strict');
 });
+
+test('a second bare argument is the command subject, and a third cannot override it', () => {
+  assert.equal(parseArgs(['revise', 'architecture-style']).flags.target, 'architecture-style');
+  assert.equal(parseArgs(['revise']).flags.target, undefined);
+  assert.equal(
+    parseArgs(['revise', 'tdd', 'coverage-gate']).flags.target,
+    'tdd',
+    'the first subject wins',
+  );
+  assert.equal(
+    parseArgs(['revise', '--dry-run', 'tdd']).flags.target,
+    'tdd',
+    'a flag in between does not consume it',
+  );
+});

@@ -17,10 +17,15 @@ const q = (raw, opts = { optionCount: 4 }) => parseQuestionInput(raw, opts);
 
 // --- question prompts -------------------------------------------------------
 
-test('empty input skips, so enter never applies a default by accident', () => {
-  assert.equal(q('').kind, CONTROL.SKIP);
-  assert.equal(q('   ').kind, CONTROL.SKIP);
-  assert.equal(q(undefined).kind, CONTROL.SKIP);
+test('empty input accepts the default, the way every other prompt behaves', () => {
+  assert.equal(q('').kind, CONTROL.ACCEPT);
+  assert.equal(q('   ').kind, CONTROL.ACCEPT);
+  assert.equal(q(undefined).kind, CONTROL.ACCEPT);
+});
+
+test('not answering has its own key, so it cannot happen by reflex', () => {
+  assert.equal(q('s').kind, CONTROL.SKIP);
+  assert.notEqual(q('').kind, CONTROL.SKIP);
 });
 
 test('a number selects that option', () => {
@@ -50,8 +55,7 @@ test('control words work in short and long form, case-insensitively', () => {
     ['s', CONTROL.SKIP],
     ['skip', CONTROL.SKIP],
     ['S', CONTROL.SKIP],
-    ['x', CONTROL.CLEAR],
-    ['reopen', CONTROL.CLEAR],
+    ['open', CONTROL.SKIP],
     ['a', CONTROL.SKIP_ALL],
     ['all', CONTROL.SKIP_ALL],
     ['d', CONTROL.DEFAULTS],
@@ -86,11 +90,6 @@ test('a number at a group gate is not a silent no-op', () => {
   assert.equal(parseGroupInput('2').kind, CONTROL.INVALID);
 });
 
-test('reopening is a per-decision action, so a gate rejects it', () => {
-  const result = parseGroupInput('x');
-  assert.equal(result.kind, CONTROL.INVALID);
-  assert.match(result.reason, /one decision/);
-});
 
 // --- the review table -------------------------------------------------------
 
