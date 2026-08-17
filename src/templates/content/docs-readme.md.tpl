@@ -64,7 +64,15 @@ linking back to it.
 
 ## Populating this from existing code
 
-If the repository already has a codebase and this log is empty, run
-`/specframe-bootstrap` with an agent that has it installed. It reads the code
-and proposes ADRs, rules, guidelines and glossary terms for you to confirm —
-it does not invent decisions you never made.
+If the codebase predates this log, its decisions are already made — they are just
+undocumented. Run `/specframe-bootstrap` with an agent that has it installed: it
+walks the checklist in [`DECISIONS.md`](DECISIONS.md), looks for evidence of each
+decision in the code, and records only what it can prove, with `path:line`
+citations.
+
+Decisions it cannot evidence stay open. Decisions the code follows only in places
+are recorded *and* flagged as partial — which is usually the most useful thing a
+first scan produces: the decision the team believes it has made and hasn't.
+
+ADRs written this way say so. They document what the code does today, and ask you
+for the original reason, which is the part the code cannot tell you.

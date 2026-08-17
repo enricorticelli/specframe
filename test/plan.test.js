@@ -182,6 +182,55 @@ test('blank mode ignores decisions it was handed', async () => {
   assert.equal(entryFor(plan, 'docs/adr/0100-architecture-style.md'), undefined);
 });
 
+// --- documenting an existing codebase --------------------------------------
+
+test('a detected decision is recorded as reconstructed, not as a fresh choice', async () => {
+  const plan = await buildTemplatePlan({
+    ...baseOpts,
+    mode: 'guided',
+    decisions: { 'architecture-style': 'microservices' },
+    provenance: { 'architecture-style': 'detected' },
+  });
+  const adr = entryFor(plan, 'docs/adr/0100-architecture-style.md').content;
+
+  assert.match(adr, /- Recorded from: the existing implementation/);
+  assert.match(adr, /recorded, not decided/);
+  assert.match(adr, /## Evidence in this repository/);
+  assert.match(adr, /## Alternatives not taken/, 'they were not weighed at the time');
+  assert.ok(!adr.includes('## Alternatives considered'));
+  // Still a full ADR: the decision, its consequences and its documents.
+  assert.match(adr, /\*\*Microservices\.\*\*/);
+  assert.match(adr, /## Consequences/);
+  assert.match(adr, /\[R-0090\]/);
+});
+
+test('the documents a detected decision implies are identical to a chosen one', async () => {
+  // Only the ADR's framing changes: a rule is a rule however it was arrived at.
+  const opts = { ...baseOpts, mode: 'guided', decisions: { 'event-sourcing': 'yes' } };
+  const chosen = await buildTemplatePlan(opts);
+  const detected = await buildTemplatePlan({ ...opts, provenance: { 'event-sourcing': 'detected' } });
+
+  const nonAdr = (plan) =>
+    plan.filter((e) => !e.relpath.startsWith('docs/adr/')).map((e) => [e.relpath, e.content]);
+  assert.deepEqual(nonAdr(detected), nonAdr(chosen));
+  assert.notEqual(
+    entryFor(detected, 'docs/adr/0320-event-sourcing.md').content,
+    entryFor(chosen, 'docs/adr/0320-event-sourcing.md').content,
+  );
+});
+
+test('provenance for a decision that was not recorded is discarded', async () => {
+  // A stale manifest entry must not change how anything renders.
+  const plan = await buildTemplatePlan({
+    ...baseOpts,
+    mode: 'guided',
+    decisions: { tdd: 'strict' },
+    provenance: { 'event-sourcing': 'detected', tdd: 'chosen' },
+  });
+  const adr = entryFor(plan, 'docs/adr/0500-test-driven-development.md').content;
+  assert.ok(!adr.includes('Recorded from'), 'an explicit "chosen" stays a normal ADR');
+});
+
 test('no planned file ships an unsubstituted placeholder', async () => {
   // Generated documents and static templates go through different renderers;
   // this is what catches one of them forgetting the global variables.

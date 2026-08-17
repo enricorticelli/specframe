@@ -55,21 +55,60 @@ function derivedFor(resolved, adrNumber) {
 // --- ADR -------------------------------------------------------------------
 
 export function renderAdr(adr, { date, resolved }) {
-  const { decision, option, alternatives, number, relpath } = adr;
+  const { decision, option, alternatives, number, relpath, provenance } = adr;
+  const detected = provenance === 'detected';
   const lines = [];
 
   lines.push(`# ADR-${number}: ${decision.title}`, '');
   lines.push('- Status: accepted');
-  lines.push(`- Date: ${date}`);
+  lines.push(`- Date: ${date}${detected ? ' (recorded, not decided — see Context)' : ''}`);
   lines.push(`- Decision key: \`${decision.id}\` = \`${option.value}\``);
+  if (detected) lines.push('- Recorded from: the existing implementation');
   lines.push('');
+
   lines.push('## Context', '', decision.context, '');
+  if (detected) {
+    // A reconstructed ADR that reads like a fresh choice is misleading: it
+    // implies a deliberation that never happened at this date, and invites a
+    // reader to trust the reasoning as contemporaneous.
+    lines.push(
+      'This decision was already implemented when this record was created. The ADR',
+      'documents what the code does today; the date above is when it was written down,',
+      'not when the choice was made. Correct the context if you know the original',
+      'reason — that is the part the code cannot tell you.',
+      '',
+    );
+  }
+
   lines.push('## Decision', '', `**${option.label}.** ${option.statement}`, '');
+
+  if (detected) {
+    lines.push('## Evidence in this repository', '');
+    lines.push(
+      '<!-- Where this decision is visible in the code. Cite `path/to/file.ext:line`.',
+      '     If the codebase only partly follows it, say so here — a half-applied',
+      '     decision is the most useful thing this document can record. -->',
+      '',
+      '-',
+      '',
+    );
+  }
+
   lines.push('## Consequences', '', bullets(option.consequences), '');
 
   if (alternatives.length > 0) {
-    lines.push('## Alternatives considered', '');
+    // For a reconstructed ADR these were not weighed at the time — claiming they
+    // were would be fiction. They are still worth recording: they are what a
+    // future proposal to change this decision has to argue against.
+    lines.push(detected ? '## Alternatives not taken' : '## Alternatives considered', '');
     lines.push(bullets(alternatives.map((alt) => `**${alt.label}** — ${alt.tradeoff}`)), '');
+    if (detected) {
+      lines.push(
+        '<!-- Reconstructed: these were not necessarily weighed when the decision was',
+        '     made. Add the ones that genuinely were, and why they lost. -->',
+        '',
+      );
+    }
   }
 
   const derived = derivedFor(resolved, number);

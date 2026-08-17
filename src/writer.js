@@ -296,12 +296,22 @@ function buildDecisionEntries(resolved, { vars }) {
 // Normalise a config that may come from a v1 manifest (contentProfile, no mode).
 export function normalizeConfig(config = {}) {
   const mode = config.mode === 'guided' ? 'guided' : 'blank';
+  const decisions = mode === 'guided' ? (config.decisions ?? {}) : {};
+
+  // Provenance is only meaningful for a decision that was recorded, and is
+  // pruned to those so a stale entry cannot change how anything renders.
+  const provenance = {};
+  for (const [id, source] of Object.entries(config.provenance ?? {})) {
+    if (decisions[id] !== undefined && source === 'detected') provenance[id] = source;
+  }
+
   return {
     configVersion: 2,
     projectName: config.projectName,
     packageManager: config.packageManager === 'pnpm' ? 'pnpm' : 'npm',
     mode,
-    decisions: mode === 'guided' ? (config.decisions ?? {}) : {},
+    decisions,
+    provenance,
     agentTargets: config.agentTargets ?? [],
     initDate: config.initDate ?? FALLBACK_DATE,
   };
@@ -315,9 +325,9 @@ export function normalizeConfig(config = {}) {
  */
 export async function buildTemplatePlan(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
-  const { projectName, packageManager, mode, decisions, agentTargets, initDate } = config;
+  const { projectName, packageManager, mode, decisions, provenance, agentTargets, initDate } = config;
 
-  const resolved = resolveDecisions({ mode, answers: decisions });
+  const resolved = resolveDecisions({ mode, answers: decisions, provenance });
 
   const vars = {
     projectName,

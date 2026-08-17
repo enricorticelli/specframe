@@ -23,7 +23,8 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 **specframe flips that around.** It scaffolds a decision-first structure in seconds and keeps every agent's tooling wired to it. Your architecture decisions, rules, conventions, runbooks and glossary *are* the source of truth — and every AI agent (Claude, Copilot, Codex, Gemini, Continue, Amazon Q) is pointed straight at them.
 
 - 🎯 **Decision-driven.** ADRs capture *what & why*, rules capture *what's non-negotiable*, guidelines capture *how you build*, runbooks capture *what to do when it breaks*, the glossary keeps *what words mean here*. Agents read intent instead of reverse-engineering it.
-- 🧭 **Two ways in.** A **blank** log with every template and the instructions to fill it, or a **guided** pass over 39 architecture decisions where each answer becomes an ADR plus the rules and guidelines it implies. Skip a whole section with one key; whatever you skip stays tracked as an open decision.
+- 🧭 **Two ways in.** A **blank** log with every template and how to fill it, or a **guided** pass over 39 architecture decisions where each answer becomes an ADR plus the rules it implies. Skip a section with one key; what you skip stays tracked as open.
+- 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical. Every agent's native config is a thin pointer back — no more syncing five instruction files by hand.
 - 🤖 **Broad agent support.** Claude, Copilot and Codex get full subagents, slash commands and skills in each tool's *current* convention. Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Jules and more read `AGENTS.md` natively — nothing extra needed.
 - 🛡️ **Safe by design.** Idempotent and re-runnable. **Your files are never overwritten.** A manifest tracks what was generated, so updates stay surgical.
@@ -48,7 +49,7 @@ Every section answers exactly one question — the same way for humans and agent
 
 A planner reads the ADRs and rules before proposing a plan. A reviewer checks diffs against enforced rules. A skill auto-drafts an ADR the moment a decision is being made. The loop stays closed.
 
-`DECISIONS.md` is what closes the *other* loop. An agent asked to add persistence to a repo that never chose a persistence model will pick one — silently, in a diff. Listing the decision as open, with its options and the trade-off, turns that into a question instead of an accident.
+`DECISIONS.md` closes the *other* loop. An agent asked to add persistence to a repo that never chose a persistence model will pick one — silently, in a diff. Listing the decision as open turns that into a question instead of an accident.
 
 ---
 
@@ -64,79 +65,70 @@ Requires **Node.js ≥ 18**. specframe always scaffolds at the **repo root** (ne
 
 After the project name, package manager and agent assistants, you pick one of **two modes**.
 
-### 1. Blank — templates only
+### Blank — templates only
 
-```bash
-npx specframe --mode blank
-```
+Every section index, a `0000-template.md` with field-by-field instructions, one worked example per section, `docs/README.md` explaining what belongs where — and `docs/DECISIONS.md` listing all 39 catalog decisions as open, each with its options and a reserved ADR number.
 
-An empty decision log that knows how to be filled in: every section index, a
-`0000-template.md` with field-by-field instructions, one worked example per
-section showing the expected level of detail, `docs/README.md` explaining which
-section a document belongs in — and `docs/DECISIONS.md` listing all 39 decisions
-in the catalog as open, each with its options and a reserved ADR number.
+Nothing decided for you; nothing left to guess about *how* to decide.
 
-Nothing is decided for you, and nothing is left to guess about *how* to decide.
+### Guided — answer decisions now
 
-### 2. Guided — answer decisions now
+Each answer becomes an **ADR** — including the alternatives you rejected and why — plus the **rules**, **guidelines**, **runbooks** and **glossary terms** it implies, cross-linked both ways. Answer `microservices` and you get the ADR, `R-0090 No service reads another service's database`, a service-boundary guideline, a degradation runbook, and the terms to match.
 
-```bash
-npx specframe                        # asks, section by section
-```
+39 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
 
-Every answer becomes an **ADR** — with the alternatives you rejected and why —
-plus the **rules**, **guidelines**, **runbooks** and **glossary terms** that
-choice implies, cross-linked in both directions. Answer `microservices` and you
-get the ADR, `R-0090 No service reads another service's database`, a service
-boundary guideline, a degradation runbook, and the terms to go with them.
+**Skipping is the fast path:** `enter` skip · `s` skip (a whole section, at its header) · `d` recommended for everything left · `a` skip everything left · `b` back · `?` explain · `q` quit.
 
-39 decisions across 8 sections: architecture · design & modelling · data &
-consistency · code quality · testing · security & compliance · observability ·
-delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all of
-it optional, none of it assumed.
-
-**Skipping is the fast path, at three levels:**
-
-| | |
-| --- | --- |
-| `enter` | skip this question |
-| `s` | skip this question · at a section header, skip all of it |
-| `d` | take the recommended option for everything remaining |
-| `a` | skip everything remaining |
-| `b` · `?` · `q` | back · explain · quit without writing |
-
-A whole section is one keystroke. The whole catalog is one keystroke. Nothing is
-ever answered by pressing enter, so a default can't slip in unnoticed.
-
-Questions that stop applying are never asked: choose a modular monolith and the
-questions about cross-service data ownership disappear.
-
-Whatever you skip lands in `docs/DECISIONS.md` as open — so the two modes are
-the same thing at different points on a dial, and `specframe decide` moves you
-along it later.
+Enter never answers anything, so a default can't slip in unnoticed. Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you skip lands in `docs/DECISIONS.md` as open, and `specframe decide` picks it up later.
 
 ### Unattended
 
 ```bash
-npx specframe --preset balanced --yes           # every recommended option
-npx specframe --preset strict --yes             # strict TDD, 80% coverage, 2 reviewers, GDPR
-npx specframe --set architecture-style=microservices,event-sourcing=yes,tdd=strict
-npx specframe --answers ./decisions.json        # or another repo's manifest.json
+npx specframe --preset balanced --yes    # every recommended option
+npx specframe --preset strict --yes      # strict TDD, 80% coverage, 2 reviewers, GDPR
+npx specframe --set architecture-style=microservices,event-sourcing=yes
+npx specframe --answers ./decisions.json # or another repo's manifest.json
 ```
 
 | Flag | Effect |
 | --- | --- |
-| `--preset blank\|balanced\|strict` | Seeds the wizard; with `--yes`, runs it unattended. |
-| `--set k=v,...` | Answer decisions directly. Repeatable. Beats `--preset` and `--answers`. |
+| `--preset blank\|balanced\|strict` | Seeds the wizard; with `--yes`, runs unattended. |
+| `--set k=v,...` | Answer directly. Repeatable. Beats `--preset` and `--answers`. |
 | `--answers FILE` | JSON map, or a saved `.specframe/manifest.json` to replay a setup. |
 | `--mode blank\|guided` | Skip the mode question. |
-| `-y, --yes` | No prompts. Unanswered decisions take their recommended option. |
+| `-y, --yes` | No prompts; unanswered decisions take their recommended option. |
+| `--detected` | These decisions are already implemented — see below. |
 | `--name` · `--pm` · `--agents` | Project name, package manager, agent targets. |
 
-A typo in `--set` is reported, never silently dropped. Off a TTY without any of
-these, specframe refuses to run rather than hang.
+A typo in `--set` is reported, never dropped. Off a TTY with none of these, specframe refuses to run rather than hang.
 
-Everything specframe generates is recorded in `.specframe/manifest.json` (a content hash per file plus your choices) — which is what makes `decide`, `update` and `uninstall` possible later.
+Everything generated is recorded in `.specframe/manifest.json` (a content hash per file plus your choices) — which is what makes `decide`, `update` and `uninstall` possible.
+
+---
+
+## Already-built repos
+
+Most repos that need a decision log already made every one of these decisions years ago — they just never wrote them down. Scaffold blank, then let an agent reconstruct the log from the code:
+
+```bash
+npx specframe --mode blank
+# then, in Claude / Copilot / Codex:
+/specframe-bootstrap
+```
+
+The `bootstrapper` agent walks the checklist in `docs/DECISIONS.md`, hunts for evidence of each decision in the code — layout, config, migrations, CI, auth, instrumentation — and records only what it can prove, citing `path:line`. It writes through `specframe decide --detected`, so a reconstructed decision gets **the same canonical ADR, numbering and derived rules** a guided init would have produced. No parallel convention, no invented numbers.
+
+Three things it does deliberately:
+
+- **Leaves the unprovable open.** No evidence means the decision stays in `DECISIONS.md`. A confidently wrong ADR is worse than a visibly missing one.
+- **Flags partial adoption.** A decision the code follows in some places and not others is recorded *and* marked — usually the most valuable output of a first scan, since it's the decision the team believes it has made and hasn't.
+- **Doesn't pretend.** A `--detected` ADR says it documents an existing implementation, dates itself as *recorded not decided*, and asks you for the original reason — the one thing the code can't tell you.
+
+Documents you already wrote are never touched, and a decision an existing ADR already covers is skipped rather than duplicated. Recording one by hand works the same way:
+
+```bash
+specframe decide --set persistence=relational,branching=trunk-based --detected
+```
 
 ---
 
@@ -160,32 +152,15 @@ Pick agent assistants and specframe drops subagents, slash commands and skills i
 
 ## Deciding later
 
-Started blank, or skipped half the catalog? Record decisions whenever you
-actually make them:
-
 ```bash
-specframe decide
-```
-
-It asks only about what is still open, then writes the new ADRs and the documents
-they imply. Nothing already on disk moves: a document's number comes from the
-catalog, not from the order you answered in, so `R-0090` is `R-0090` whether it
-was written on day one or a year later.
-
-Your existing documents are never overwritten. The section indexes and
-`DECISIONS.md` *are* refreshed — they exist to describe the set — but only if you
-haven't edited them; if you have, the new version lands beside them as
-`.specframe-new`.
-
-Same flags as `init`: `--set`, `--answers`, `--preset`, `--yes`, `-n`.
-
-```bash
+specframe decide                              # asks only what's still open
 specframe decide --set event-sourcing=yes,cqrs=full
-specframe decide --yes -n          # preview taking every recommendation
+specframe decide --yes -n                     # preview taking every recommendation
 ```
 
-An already-recorded decision is never silently rewritten — supersede its ADR
-instead, the way the decision log is meant to work.
+Nothing already on disk moves. A document's number comes from the catalog, not from the order you answered in, so `R-0090` is `R-0090` whether it was written on day one or a year later.
+
+Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — but only if you haven't edited them; if you have, the new version lands beside them as `.specframe-new`. An already-recorded decision is never silently rewritten: supersede its ADR instead.
 
 ---
 
@@ -212,18 +187,11 @@ Hand-edited a managed file? The new version lands beside it as `<file>.specframe
 | `-n`, `--dry-run` | Preview changes without writing. |
 | `-f`, `--force` | Overwrite edited managed files (no `.specframe-new`). |
 
-A newer specframe may add decisions to the catalog. `update` never re-prompts for
-them: they appear in `docs/DECISIONS.md` as open, and `specframe decide` is how
-you answer them.
+A newer specframe may add decisions to the catalog. `update` never re-prompts for them: they show up in `docs/DECISIONS.md` as open, and `specframe decide` answers them.
 
 > No manifest (repo scaffolded before update-tracking)? `update` asks for your choices once and stays conservative — writing `.specframe-new` rather than overwriting.
 
-> **Upgrading from 0.4.x or earlier.** The `empty` / `universal` content profiles
-> are gone, replaced by the two modes above. A repo scaffolded with `universal`
-> keeps everything it has — `docs/**` is yours and `update` has never touched it —
-> and is treated as blank going forward. The baseline that `universal` shipped as
-> two long README files now lives as individual rules and guidelines, emitted only
-> by the decisions that call for them; `specframe decide` is how you opt into it.
+> **Upgrading from 0.4.x or earlier.** The `empty` / `universal` content profiles are gone, replaced by the two modes above. A `universal` repo keeps everything it has — `docs/**` is yours and `update` has never touched it — and is treated as blank from here. The baseline `universal` shipped as two long READMEs now lives as individual rules and guidelines, emitted only by the decisions that call for them; `specframe decide` opts back into it.
 
 ---
 

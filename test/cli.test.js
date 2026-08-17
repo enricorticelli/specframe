@@ -15,11 +15,16 @@ test('commands are recognised', () => {
 });
 
 test('boolean flags parse in short and long form', () => {
-  const { flags } = parseArgs(['update', '-f', '--dry-run', '--purge', '-y']);
+  const { flags } = parseArgs(['update', '-f', '--dry-run', '--purge', '-y', '--detected']);
   assert.equal(flags.force, true);
   assert.equal(flags.dryRun, true);
   assert.equal(flags.purge, true);
   assert.equal(flags.yes, true);
+  assert.equal(flags.detected, true);
+});
+
+test('--detected defaults to off, so an ADR is a fresh choice unless said otherwise', () => {
+  assert.equal(parseArgs(['decide', '--set', 'tdd=strict']).flags.detected, false);
 });
 
 test('value flags accept both --flag value and --flag=value', () => {

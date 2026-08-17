@@ -23,6 +23,7 @@ The caller must supply:
 
 - Do not decide whether something is worth documenting — that's the caller's job.
 - Do not invent content beyond what the caller supplied.
+- Do not hand-write an ADR for a decision listed in `docs/DECISIONS.md`: those have a reserved number and canonical wording, and are written by `specframe decide`. Filling in the sections of an ADR that command already created is fine, and expected.
 - Do not overwrite or rewrite entries authored by the user.
 - Do not mark an ADR `accepted` unless the caller explicitly says adoption is confirmed.
 

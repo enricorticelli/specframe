@@ -30,7 +30,14 @@ async function getVersion() {
 const VALUE_FLAGS = new Set(['--preset', '--answers', '--set', '--mode', '--name', '--pm', '--agents']);
 
 export function parseArgs(argv) {
-  const flags = { force: false, dryRun: false, purge: false, help: false, yes: false };
+  const flags = {
+    force: false,
+    dryRun: false,
+    purge: false,
+    help: false,
+    yes: false,
+    detected: false,
+  };
   let command = 'init';
   let commandSeen = false;
 
@@ -42,6 +49,7 @@ export function parseArgs(argv) {
     if (arg === '--purge') { flags.purge = true; continue; }
     if (arg === '--help' || arg === '-h') { flags.help = true; continue; }
     if (arg === '--yes' || arg === '-y') { flags.yes = true; continue; }
+    if (arg === '--detected') { flags.detected = true; continue; }
 
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
@@ -99,10 +107,15 @@ Init options:
       --name NAME     Project name (default: directory name).
       --pm NAME       npm | pnpm (default: npm).
       --agents LIST   claude,copilot,codex,gemini,continue,amazonq | none
+      --detected      These decisions are already implemented in this codebase.
+                      Their ADRs say so, and ask for the evidence in the code
+                      instead of presenting the choice as new. Use this when
+                      documenting an existing repository — /specframe-bootstrap
+                      does it for you.
 
 Decide options:
   -n, --dry-run    Show what would be written.
-      --set / --answers / --preset / --yes  as for init.
+      --set / --answers / --preset / --yes / --detected  as for init.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -208,7 +221,10 @@ async function runInit(cwd, version, flags) {
     config = answers;
   }
 
-  const full = { ...config, initDate: today() };
+  const provenance = flags.detected
+    ? Object.fromEntries(Object.keys(config.decisions ?? {}).map((id) => [id, 'detected']))
+    : {};
+  const full = { ...config, provenance, initDate: today() };
   logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions }));
   console.log('');
 
@@ -295,7 +311,14 @@ async function runDecide(cwd, version, flags) {
     return;
   }
 
-  const config = { ...stored, mode: 'guided', decisions };
+  // --detected applies to what this run records: the ADRs say they document an
+  // existing implementation rather than a fresh choice, and ask for the evidence.
+  const provenance = { ...stored.provenance };
+  if (flags.detected) {
+    for (const id of newlyDecided) provenance[id] = 'detected';
+  }
+
+  const config = { ...stored, mode: 'guided', decisions, provenance };
   console.log('');
   await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
   logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));

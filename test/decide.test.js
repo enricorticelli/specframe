@@ -174,6 +174,37 @@ test('the worked examples from blank mode survive being decided over', async () 
   }
 });
 
+test('provenance survives in the manifest and only marks what it recorded', async () => {
+  const dir = await blankRepo();
+  try {
+    const config = { targetDir: dir, ...BASE, mode: 'guided', version: '0.5.0' };
+
+    // A first pass documents what the codebase already does.
+    await decideTemplateSet({
+      ...config,
+      decisions: { 'architecture-style': 'microservices' },
+      provenance: { 'architecture-style': 'detected' },
+    });
+
+    // A later pass records a genuinely new choice.
+    await decideTemplateSet({
+      ...config,
+      decisions: { 'architecture-style': 'microservices', 'event-sourcing': 'yes' },
+      provenance: { 'architecture-style': 'detected' },
+    });
+
+    const manifest = await readManifest(dir);
+    assert.deepEqual(manifest.config.provenance, { 'architecture-style': 'detected' });
+
+    const reconstructed = await readFile(abs(dir, 'docs/adr/0100-architecture-style.md'), 'utf8');
+    const chosen = await readFile(abs(dir, 'docs/adr/0320-event-sourcing.md'), 'utf8');
+    assert.match(reconstructed, /Recorded from: the existing implementation/);
+    assert.ok(!chosen.includes('Recorded from'), 'the new decision is a normal ADR');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('dry run writes nothing', async () => {
   const dir = await blankRepo();
   try {

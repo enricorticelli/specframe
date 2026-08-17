@@ -40,7 +40,12 @@ test('init writes a manifest capturing version and config', async () => {
   try {
     const manifest = await readManifest(dir);
     assert.equal(manifest.version, '0.1.0');
-    assert.deepEqual(manifest.config, { ...CONFIG, configVersion: 2, decisions: {} });
+    assert.deepEqual(manifest.config, {
+      ...CONFIG,
+      configVersion: 2,
+      decisions: {},
+      provenance: {},
+    });
     assert.ok(manifest.files[EXPLORER].managed, 'explorer is managed');
     assert.equal(manifest.files[CLAUDE_MD].managed, false, 'CLAUDE.md is user-owned');
   } finally {

@@ -60,12 +60,18 @@ function partitionAnswers(answers) {
 
 /**
  * @param {object}  input
- * @param {string}  input.mode     'blank' | 'guided'. In blank mode answers are
- *                                 ignored entirely: every decision is open.
- * @param {object}  input.answers  { [decisionId]: optionValue }
+ * @param {string}  input.mode        'blank' | 'guided'. In blank mode answers are
+ *                                    ignored entirely: every decision is open.
+ * @param {object}  input.answers     { [decisionId]: optionValue }
+ * @param {object}  input.provenance  { [decisionId]: 'chosen' | 'detected' }.
+ *                                    'detected' means the decision was already
+ *                                    implemented and is being written down after
+ *                                    the fact — the ADR says so, and asks for the
+ *                                    evidence in the code rather than pretending
+ *                                    the choice is being made now.
  * @returns resolved document set — see the shape assembled at the end.
  */
-export function resolveDecisions({ mode = 'blank', answers = {} } = {}) {
+export function resolveDecisions({ mode = 'blank', answers = {}, provenance = {} } = {}) {
   const { valid, invalid } = partitionAnswers(mode === 'blank' ? {} : answers);
 
   const decided = [];
@@ -104,6 +110,7 @@ export function resolveDecisions({ mode = 'blank', answers = {} } = {}) {
     relpath: `docs/adr/${decision.adr}-${decision.slug}.md`,
     decision,
     option,
+    provenance: provenance[decision.id] === 'detected' ? 'detected' : 'chosen',
     // Everything not chosen, so the ADR records what was weighed and rejected.
     alternatives: decision.options.filter((o) => o.value !== option.value),
   }));
