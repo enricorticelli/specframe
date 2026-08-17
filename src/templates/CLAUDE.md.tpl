@@ -1,10 +1,13 @@
 # CLAUDE
 
 - Follow AGENTS.md as canonical contract.
+- Read docs/README.md first if you are new to this repository's layout.
 - Read ADRs before coding.
 - Respect rules in docs/rules/ as non-negotiable.
 - Follow conventions in docs/guidelines/.
 - Check docs/glossary/ for unfamiliar terms.
+- Check docs/DECISIONS.md before making an architectural choice yourself: if the
+  decision is listed there, it is open on purpose. Propose it, do not assume it.
 - Prefer small diffs.
 - If a new architectural choice appears, draft a new ADR.
 - If a new convention, rule, procedure, or term emerges, draft the matching doc.

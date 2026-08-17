@@ -3,10 +3,21 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { applyRecommendedDefaults, collectAnswerSources, validateAnswers } from './answers.js';
+import { isRelevant } from './decisions/catalog.js';
+import { PRESET_IDS, PRESETS } from './decisions/presets.js';
+import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
-import { askQuestions } from './prompts.js';
+import { askQuestions, parseAgentTargets } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
-import { uninstallTemplateSet, updateTemplateSet, writeTemplateSet } from './writer.js';
+import {
+  decideTemplateSet,
+  normalizeConfig,
+  today,
+  uninstallTemplateSet,
+  updateTemplateSet,
+  writeTemplateSet,
+} from './writer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,17 +26,39 @@ async function getVersion() {
   return pkg.version;
 }
 
-function parseArgs(argv) {
-  const flags = { force: false, dryRun: false, purge: false, help: false };
+// Flags that take a value, in either `--flag value` or `--flag=value` form.
+const VALUE_FLAGS = new Set(['--preset', '--answers', '--set', '--mode', '--name', '--pm', '--agents']);
+
+export function parseArgs(argv) {
+  const flags = { force: false, dryRun: false, purge: false, help: false, yes: false };
   let command = 'init';
   let commandSeen = false;
 
-  for (const arg of argv) {
-    if (arg === '--force' || arg === '-f') flags.force = true;
-    else if (arg === '--dry-run' || arg === '-n') flags.dryRun = true;
-    else if (arg === '--purge') flags.purge = true;
-    else if (arg === '--help' || arg === '-h') flags.help = true;
-    else if (!arg.startsWith('-') && !commandSeen) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+
+    if (arg === '--force' || arg === '-f') { flags.force = true; continue; }
+    if (arg === '--dry-run' || arg === '-n') { flags.dryRun = true; continue; }
+    if (arg === '--purge') { flags.purge = true; continue; }
+    if (arg === '--help' || arg === '-h') { flags.help = true; continue; }
+    if (arg === '--yes' || arg === '-y') { flags.yes = true; continue; }
+
+    const eq = arg.indexOf('=');
+    const name = eq > 0 ? arg.slice(0, eq) : arg;
+
+    if (VALUE_FLAGS.has(name)) {
+      const value = eq > 0 ? arg.slice(eq + 1) : argv[++i];
+      if (value === undefined) throw new Error(`${name} requires a value.`);
+      const key = name.slice(2);
+      // --set is repeatable and accumulates, so a preset can be adjusted with
+      // several separate flags.
+      flags[key] = key === 'set' && flags.set ? `${flags.set},${value}` : value;
+      continue;
+    }
+
+    if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}\n\n${HELP}`);
+
+    if (!commandSeen) {
       command = arg;
       commandSeen = true;
     }
@@ -34,15 +67,42 @@ function parseArgs(argv) {
   return { command, flags };
 }
 
-const HELP = `specframe — scaffold and maintain AI-context files for a repository.
+const HELP = `specframe — decision-driven scaffolding for AI-ready repositories.
 
 Usage:
-  specframe [init]            Scaffold context files at the repo root.
-  specframe update [options]  Refresh specframe-managed artifacts to this version.
+  specframe [init] [options]     Scaffold context files at the repo root.
+  specframe decide [options]     Record decisions still open in this repo.
+  specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
-The scaffolding is always written to the root of the repository (the nearest
-ancestor with a .git directory), even when you run the CLI from a subdirectory.
+Everything is written to the root of the repository (the nearest ancestor with
+a .git directory), even when the CLI is run from a subdirectory.
+
+Init has two modes:
+  blank    Every template plus its filling instructions, and the full decision
+           backlog in docs/DECISIONS.md. No decisions taken.
+  guided   Answer decisions from the catalog. Each one becomes an ADR plus the
+           rules, guidelines, runbooks and glossary terms it implies. Skipping
+           is one key per question, or per section.
+
+Init options:
+      --preset <id>   ${PRESET_IDS.join(' | ')}
+                      Seeds the wizard; with --yes it runs unattended.
+      --set k=v,...   Answer decisions directly, e.g.
+                      --set architecture-style=microservices,tdd=strict
+                      Repeatable. Overrides --preset and --answers.
+      --answers FILE  JSON of { "decision-id": "option-value" }, or a saved
+                      .specframe/manifest.json to replay another repo's setup.
+      --mode MODE     blank | guided. Skips the mode question.
+  -y, --yes           No prompts. Unanswered decisions in guided mode take
+                      their recommended option.
+      --name NAME     Project name (default: directory name).
+      --pm NAME       npm | pnpm (default: npm).
+      --agents LIST   claude,copilot,codex,gemini,continue,amazonq | none
+
+Decide options:
+  -n, --dry-run    Show what would be written.
+      --set / --answers / --preset / --yes  as for init.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -50,21 +110,198 @@ Update options:
 
 Uninstall options:
       --purge      Also remove user-owned starters (CLAUDE.md, docs/**, …).
-                   By default only specframe-managed files are removed.
-  -n, --dry-run    Show what would be removed without deleting anything.
+  -n, --dry-run    Show what would be removed.
 
 Common options:
   -h, --help       Show this help.
+
+Presets:
+${PRESET_IDS.map((id) => `  ${id.padEnd(9)} ${PRESETS[id].description}`).join('\n')}
 
 On update, files you own (docs, ADRs, CLAUDE.md, …) are never overwritten.
 A managed file you edited by hand is kept; the new version lands beside it as
 <file>.specframe-new for you to merge.`;
 
-async function runInit(cwd, version) {
+function reportInvalidAnswers(invalid) {
+  if (invalid.length === 0) return;
+  console.warn('\nIgnoring answers that do not match the decision catalog:');
+  for (const { id, value, reason } of invalid) {
+    console.warn(`  ${id}=${value} — ${reason}`);
+  }
+  console.warn('');
+}
+
+function currentDirName(cwd) {
+  const parts = cwd.split(/[\\/]+/).filter(Boolean);
+  return parts[parts.length - 1] || 'current-repo';
+}
+
+function logPlanSummary(resolved) {
+  const s = summarize(resolved);
+  console.log(
+    `\n${s.decided} decisions recorded · ${s.open} open · ` +
+      `${s.adrs} ADRs, ${s.rules} rules, ${s.guidelines} guidelines, ` +
+      `${s.runbooks} runbooks, ${s.glossaryTerms} glossary terms`,
+  );
+}
+
+async function runInit(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
-  const answers = await askQuestions();
-  await writeTemplateSet({ targetDir, ...answers, version });
+
+  const sources = await collectAnswerSources({
+    preset: flags.preset,
+    answersFile: flags.answers,
+    set: flags.set,
+  });
+  const { valid, invalid } = validateAnswers(sources.answers);
+  reportInvalidAnswers(invalid);
+
+  const mode = flags.mode ?? sources.mode;
+  if (mode && mode !== 'blank' && mode !== 'guided') {
+    throw new Error(`Unknown --mode: ${mode}. Expected blank or guided.`);
+  }
+  if (mode === 'blank' && Object.keys(valid).length > 0) {
+    console.warn(
+      '\n--mode blank takes no decisions, so the answers supplied are ignored.\n' +
+        'Drop --mode to record them, or run `specframe decide` afterwards.\n',
+    );
+  }
+
+  const unattended = flags.yes || !process.stdin.isTTY;
+  if (unattended && !flags.yes && !flags.preset && !flags.set && !flags.answers && !flags.mode) {
+    throw new Error(
+      'Not running on a terminal, and no answers were supplied.\n' +
+        'Pass --mode blank for the template set, or --preset/--set/--yes to configure it.',
+    );
+  }
+
+  let config;
+  if (unattended) {
+    const resolvedMode = mode ?? 'blank';
+    config = {
+      projectName: flags.name ?? currentDirName(targetDir),
+      packageManager: flags.pm === 'pnpm' ? 'pnpm' : 'npm',
+      agentTargets: parseAgentTargets(flags.agents),
+      mode: resolvedMode,
+      decisions:
+        resolvedMode === 'guided' && flags.yes ? applyRecommendedDefaults(valid) : valid,
+    };
+    console.log(
+      `Running unattended: mode ${resolvedMode}` +
+        (flags.preset ? `, preset ${flags.preset}` : '') +
+        '.',
+    );
+  } else {
+    const answers = await askQuestions({
+      seed: {
+        projectName: flags.name,
+        packageManager: flags.pm,
+        agentTargets: parseAgentTargets(flags.agents),
+        decisions: valid,
+      },
+      mode,
+    });
+    if (answers === null) {
+      console.log('\nCancelled. Nothing was written.');
+      return;
+    }
+    config = answers;
+  }
+
+  const full = { ...config, initDate: today() };
+  logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions }));
+  console.log('');
+
+  await writeTemplateSet({ targetDir, ...full, version });
   console.log(`\nDone. Context files are ready in: ${targetDir}`);
+  if (full.mode === 'blank') {
+    console.log('Open docs/README.md to see how the sections fit together,');
+    console.log('and docs/DECISIONS.md for the decisions still to make.');
+    console.log('Run `specframe decide` when you want to record some of them.');
+  }
+}
+
+// Record decisions in a repository that has already been scaffolded. Reuses the
+// stored config, asks only about decisions still open, and never overwrites an
+// existing document.
+async function runDecide(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `decide` extends an existing scaffold.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  const resolvedBefore = resolveDecisions({ mode: 'guided', answers: stored.decisions });
+  const openIds = resolvedBefore.open.map((o) => o.decision.id);
+
+  if (openIds.length === 0) {
+    console.log('Every decision in the catalog is already recorded. Nothing to do.');
+    return;
+  }
+
+  const sources = await collectAnswerSources({
+    preset: flags.preset,
+    answersFile: flags.answers,
+    set: flags.set,
+  });
+  const { valid, invalid } = validateAnswers(sources.answers);
+  reportInvalidAnswers(invalid);
+
+  // A non-interactive source may only answer decisions that are still open;
+  // silently rewriting a recorded decision would contradict its ADR.
+  const alreadyDecided = Object.keys(valid).filter((id) => !openIds.includes(id));
+  if (alreadyDecided.length > 0) {
+    console.warn(
+      `\nIgnoring decisions already recorded: ${alreadyDecided.join(', ')}\n` +
+        'Supersede them by editing their ADR instead.\n',
+    );
+  }
+  const fresh = Object.fromEntries(Object.entries(valid).filter(([id]) => openIds.includes(id)));
+
+  let decisions;
+  const unattended = flags.yes || !process.stdin.isTTY;
+  if (unattended) {
+    decisions = flags.yes
+      ? applyRecommendedDefaults({ ...stored.decisions, ...fresh }, { only: openIds })
+      : { ...stored.decisions, ...fresh };
+    if (Object.keys(fresh).length === 0 && !flags.yes) {
+      throw new Error(
+        'Not running on a terminal, and no answers were supplied.\n' +
+          'Pass --set/--answers/--preset, or --yes to accept the recommended options.',
+      );
+    }
+  } else {
+    console.log(`\n${openIds.length} decisions are still open in this repository.`);
+    const answered = await askQuestions({
+      seed: { ...stored, decisions: { ...stored.decisions, ...fresh } },
+      mode: 'guided',
+      only: openIds,
+      basics: false,
+    });
+    if (answered === null) {
+      console.log('\nCancelled. Nothing was written.');
+      return;
+    }
+    decisions = answered.decisions;
+  }
+
+  const newlyDecided = Object.keys(decisions).filter((id) => stored.decisions[id] === undefined);
+  if (newlyDecided.length === 0) {
+    console.log('\nNo new decisions were recorded. Nothing was written.');
+    return;
+  }
+
+  const config = { ...stored, mode: 'guided', decisions };
+  console.log('');
+  await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+  logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));
+  console.log(
+    flags.dryRun ? '\nDry run complete. Nothing was written.' : `\nRecorded ${newlyDecided.length} decisions.`,
+  );
 }
 
 async function runUpdate(cwd, version, flags) {
@@ -73,18 +310,31 @@ async function runUpdate(cwd, version, flags) {
 
   let config;
   if (manifest?.config) {
-    config = manifest.config;
+    config = normalizeConfig(manifest.config);
     console.log(
       `Updating to specframe ${version} (was ${manifest.version ?? 'unknown'}), ` +
         `using choices saved in ${'.specframe/manifest.json'}.\n`,
     );
+    if (manifest.config.contentProfile !== undefined && manifest.config.mode === undefined) {
+      console.warn(
+        'This repository was scaffolded before the two onboarding modes existed.\n' +
+          `The old "${manifest.config.contentProfile}" content profile no longer exists; your\n` +
+          'documents under docs/ are yours and are left untouched. Run `specframe decide`\n' +
+          'to record decisions as ADRs going forward.\n',
+      );
+    }
   } else {
     console.log(
       'No .specframe/manifest.json found — this repo was scaffolded before update\n' +
         'tracking existed. Re-confirm your choices; edited files will be preserved\n' +
         'conservatively (a .specframe-new is written instead of overwriting).\n',
     );
-    config = await askQuestions();
+    const answers = await askQuestions({});
+    if (answers === null) {
+      console.log('\nCancelled. Nothing was written.');
+      return;
+    }
+    config = { ...answers, initDate: today() };
   }
 
   await updateTemplateSet({
@@ -95,6 +345,20 @@ async function runUpdate(cwd, version, flags) {
     dryRun: flags.dryRun,
   });
 
+  // A newer catalog can introduce decisions this repo has never seen. They are
+  // not re-prompted: they surface in docs/DECISIONS.md, and `specframe decide`
+  // is how you answer them.
+  if (config.mode === 'guided') {
+    const resolved = resolveDecisions({ mode: 'guided', answers: config.decisions });
+    const newOpen = resolved.open.filter((o) => isRelevant(o.decision, config.decisions));
+    if (newOpen.length > 0) {
+      console.log(
+        `\n${newOpen.length} decisions in this version's catalog are unanswered here.\n` +
+          'They are listed in docs/DECISIONS.md — run `specframe decide` to record them.',
+      );
+    }
+  }
+
   console.log(flags.dryRun ? '\nDry run complete. Nothing was written.' : '\nUpdate complete.');
 }
 
@@ -104,11 +368,11 @@ async function runUninstall(cwd, flags) {
 }
 
 // Always operate on the repository root, never on an arbitrary subdirectory.
-// `init`/`update`/`uninstall` resolve to the nearest ancestor containing a
-// `.git` (the actual repo root) or an existing `.specframe/manifest.json` (a
-// repo specframe already scaffolded). If neither is found we fall back to cwd
-// and warn when it isn't itself a git repo root, so `init` still works in a
-// brand-new folder that hasn't been `git init`-ed yet.
+// `init`/`decide`/`update`/`uninstall` resolve to the nearest ancestor
+// containing a `.git` (the actual repo root) or an existing
+// `.specframe/manifest.json` (a repo specframe already scaffolded). If neither
+// is found we fall back to cwd and warn when it isn't itself a git repo root,
+// so `init` still works in a brand-new folder that hasn't been `git init`-ed yet.
 async function resolveTargetDir(cwd) {
   const root = await findRepoRoot(cwd);
   if (root) {
@@ -137,6 +401,11 @@ export async function run(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === 'decide') {
+    await runDecide(cwd, version, flags);
+    return;
+  }
+
   if (command === 'update') {
     await runUpdate(cwd, version, flags);
     return;
@@ -148,7 +417,7 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   if (command === 'init') {
-    await runInit(cwd, version);
+    await runInit(cwd, version, flags);
     return;
   }
 

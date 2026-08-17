@@ -11,9 +11,11 @@ Invoke when:
 
 ## Do
 
-1. Read `docs/adr/README.md` and existing ADRs to find the next free number and confirm nothing equivalent already exists.
-2. Decide the content: Status (`proposed` unless the user confirms adoption), Context, Decision, Consequences, and any related ADR this one supersedes.
-3. Delegate to the `doc-writer` agent to render and write the entry — pass category `adr`, the target file, the decided content, and source citations.
+1. Read `docs/DECISIONS.md` first. If the decision is listed there it already has a **reserved ADR number** — use that number, and tick the entry off once the ADR is written. Do not allocate a new one.
+2. Otherwise read `docs/adr/README.md` and the existing ADRs to find the next free number (steps of 10) and confirm nothing equivalent already exists.
+3. Decide the content: Status (`proposed` unless the user confirms adoption), Context, Decision, Consequences, Alternatives considered (with the reason each lost), and any related ADR this one supersedes.
+4. Delegate to the `doc-writer` agent to render and write the entry — pass category `adr`, the target file, the decided content, and source citations.
+5. If the decision implies a constraint or a default, follow up with the matching rule or guideline, carrying a `Source: ADR-NNNN` line back to this ADR.
 
 ## Do not
 
