@@ -23,7 +23,7 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 **specframe flips that around.** It scaffolds a decision-first structure in seconds and keeps every agent's tooling wired to it. Your architecture decisions, rules, conventions, runbooks and glossary *are* the source of truth — and every AI agent (Claude, Copilot, Codex, Gemini, Continue, Amazon Q) is pointed straight at them.
 
 - 🎯 **Decision-driven.** ADRs capture *what & why*, rules capture *what's non-negotiable*, guidelines capture *how you build*, runbooks capture *what to do when it breaks*, the glossary keeps *what words mean here*. Agents read intent instead of reverse-engineering it.
-- 🧭 **Two ways in.** A **blank** log with every template and how to fill it, or a **guided** pass over 39 architecture decisions where each answer becomes an ADR plus the rules it implies. Skip a section with one key; what you skip stays tracked as open.
+- 🧭 **Two ways in.** A **blank** log with every template and how to fill it, or a **guided** pass over 42 architecture decisions where each answer becomes an ADR plus the rules it implies. Skip a section with one key; what you skip stays tracked as open.
 - 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical. Every agent's native config is a thin pointer back — no more syncing five instruction files by hand.
 - 🤖 **Broad agent support.** Claude, Copilot and Codex get full subagents, slash commands and skills in each tool's *current* convention. Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Jules and more read `AGENTS.md` natively — nothing extra needed.
@@ -67,7 +67,7 @@ After the project name, package manager and agent assistants, you pick one of **
 
 ### Blank — templates only
 
-Every section index, a `0000-template.md` with field-by-field instructions, one worked example per section, `docs/README.md` explaining what belongs where — and `docs/DECISIONS.md` listing all 39 catalog decisions as open, each with its options and a reserved ADR number.
+Every section index, a `0000-template.md` with field-by-field instructions, one worked example per section, `docs/README.md` explaining what belongs where — and `docs/DECISIONS.md` listing all 42 catalog decisions as open, each with its options and a reserved ADR number.
 
 Nothing decided for you; nothing left to guess about *how* to decide.
 
@@ -75,7 +75,7 @@ Nothing decided for you; nothing left to guess about *how* to decide.
 
 Each answer becomes an **ADR** — including the alternatives you rejected and why — plus the **rules**, **guidelines**, **runbooks** and **glossary terms** it implies, cross-linked both ways. Answer `microservices` and you get the ADR, `R-0090 No service reads another service's database`, a service-boundary guideline, a degradation runbook, and the terms to match.
 
-39 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
+42 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
 
 **`enter` takes the recommended option** — the one marked ★, named in the prompt so you can see what you're accepting. Hold enter down and you get the `balanced` preset one visible answer at a time. On a second pass over a question you've already answered, enter *keeps* your answer instead.
 
@@ -93,11 +93,14 @@ Thirty-odd decisions is more than anyone holds in their head, so nothing is writ
 ┌────┬──────────────────────────────┬────────────────────────┬─────┬──────┐
 │  # │ Decision                     │ Choice                 │ Rec │ ADR  │
 ├────┼──────────────────────────────┼────────────────────────┼─────┼──────┤
-│ Architecture                                        2 of 3 answered     │
+│ Architecture                                        5 of 6 answered     │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  1 │ Architecture style           │ Microservices          │     │ 0100 │
 │  2 │ Inter-component comm         │ Async messaging        │  *  │ 0110 │
 │  3 │ External API style           │ not decided            │     │  —   │
+│  4 │ Component structure          │ Domain, leaves only    │  *  │ 0130 │
+│  5 │ Shared code placement        │ Shared component       │  *  │ 0140 │
+│  6 │ Structural governance        │ Fitness functions      │  *  │ 0150 │
 └────┴──────────────────────────────┴────────────────────────┴─────┴──────┘
 ```
 
