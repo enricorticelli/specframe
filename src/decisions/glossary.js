@@ -19,9 +19,9 @@ export const GLOSSARY_TERMS = {
     term: 'Module',
     definition:
       'A unit of the codebase that owns a business capability and exposes a single explicit entry point. A module is a compile-time boundary, not a deployment boundary.',
-    aliases: 'Component, package',
+    aliases: 'Package',
     context: 'Applies to the top-level structure of the codebase.',
-    related: 'Service, Bounded context',
+    related: 'Component, Service, Bounded context',
   },
 
   service: {
@@ -242,5 +242,74 @@ export const GLOSSARY_TERMS = {
     aliases: '—',
     context: 'Applies to user-facing services with defined objectives.',
     related: 'Release, Environment',
+  },
+  component: {
+    group: 'architecture',
+    term: 'Component',
+    definition:
+      'The smallest named unit of the codebase that owns source code: a leaf of the namespace tree. Everything above it is a subdomain and holds no code, which is what makes a component\'s size, coupling, and owner answerable questions.',
+    aliases: 'Leaf package, leaf namespace',
+    context: 'Applies to code organisation, independently of how many things are deployed.',
+    related: 'Module, Shared code, Afferent coupling',
+  },
+
+  'shared-code': {
+    group: 'architecture',
+    term: 'Shared code',
+    definition:
+      'Code used by more than one component, held in a component of its own rather than in a parent namespace. Shared domain logic is business logic common to some components; shared infrastructure is operational and common to all of them. The two are kept apart.',
+    aliases: 'Common code',
+    context: 'Applies to interfaces, abstract classes, and utilities with more than one caller.',
+    related: 'Component, Module',
+  },
+
+  'afferent-coupling': {
+    group: 'architecture',
+    term: 'Afferent coupling',
+    definition:
+      'The number of other components that depend on a given component — incoming edges. High afferent coupling makes a component expensive to change, because the cost lands on its dependants.',
+    aliases: 'CA, incoming coupling, fan-in',
+    context: 'Measured between components, ignoring dependencies internal to one.',
+    related: 'Efferent coupling, Component, Fitness function',
+  },
+
+  'efferent-coupling': {
+    group: 'architecture',
+    term: 'Efferent coupling',
+    definition:
+      'The number of other components a given component depends on — outgoing edges. High efferent coupling makes a component fragile, because it inherits every dependency\'s failure and release schedule.',
+    aliases: 'CE, outgoing coupling, fan-out',
+    context: 'Measured between components, ignoring dependencies internal to one.',
+    related: 'Afferent coupling, Component, Fitness function',
+  },
+
+  'fitness-function': {
+    group: 'quality',
+    term: 'Fitness function',
+    definition:
+      'An automated check that an architectural characteristic still holds — component boundaries, coupling, size distribution. It runs in the pipeline like a test, and either alerts or fails the build.',
+    aliases: 'Architecture test',
+    context: 'Applies to structural properties, not to behaviour, which is what ordinary tests cover.',
+    related: 'Statement count, Afferent coupling, Architecture story',
+  },
+
+  'statement-count': {
+    group: 'quality',
+    term: 'Statement count',
+    definition:
+      'The number of statements in a component — actions terminated by a semicolon or a newline, depending on the language. An imperfect but honest proxy for how much a component does, and the one size metric that does not depend on how a developer chose to split classes.',
+    aliases: '—',
+    context: 'Used to compare components against each other, not as an absolute target.',
+    related: 'Component, Fitness function',
+  },
+
+  'architecture-story': {
+    group: 'delivery',
+    term: 'Architecture story',
+    definition:
+      'A backlog item for structural work, distinct from a user story and from a technical-debt ticket: decoupling X in order to better support Y, where Y is an architectural characteristic or a business need. The stated Y is what gives it a defensible priority.',
+    aliases: '—',
+    context: 'Applies to the backlog; it competes with features rather than waiting behind them.',
+    related: 'Fitness function, Component',
   },
 };

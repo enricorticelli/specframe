@@ -71,9 +71,9 @@ export const GUIDELINES = {
     title: 'Layering and dependency direction',
     scope: 'Whole codebase structure.',
     statement:
-      'Separate domain, application, infrastructure, and interface concerns. Dependencies point inward: the domain declares the interfaces it needs, and outer layers implement them. IO lives at the edges.',
+      'Separate domain, application, infrastructure, and interface concerns. Dependencies point inward: the domain declares the interfaces it needs, and outer layers implement them. IO lives at the edges. Layers live inside a component, not above it: the top of the tree names business domains, and the layer split appears within a component — `customer.billing.payment.domain`, never `domain.customer.billing`.',
     rationale:
-      'It lets business rules be tested without a database, a broker, or a running server, and confines a framework change to the layer that chose the framework.',
+      'It lets business rules be tested without a database, a broker, or a running server, and confines a framework change to the layer that chose the framework. Keeping the layer split below the domain split is what stops a single feature from being spread across the whole tree.',
   },
 
   'design-patterns-vocabulary': {
@@ -434,5 +434,60 @@ export const GUIDELINES = {
       '{{style}} Keep queries behind repositories named for the domain operation they serve. Set explicit transaction boundaries in the application layer, never in the domain. Index for the queries you actually run, and treat an unbounded query as a bug.',
     rationale:
       'Repository boundaries keep the storage choice replaceable, and explicit transaction scope is what makes concurrent behaviour reviewable.',
+  },
+  'component-naming': {
+    number: '0420',
+    title: 'Components name what they do',
+    scope: 'Component and namespace names.',
+    statement:
+      'A component name states its role and responsibility without further reading. When the name leaves the question open, change the name — and check whether the namespace above it is wrong too.',
+    rationale:
+      'The namespace path is the first thing a new colleague and an agent both read to decide where a change belongs. A name that needs explaining sends every one of those decisions somewhere else.',
+    good: 'customer.billing.history\nticket.assignment.routing',
+    avoid: 'ticket.manager\ncustomer.util.helper',
+  },
+
+  'shared-code-placement': {
+    number: '0430',
+    title: 'Shared code is a component, not a parent node',
+    scope: 'Interfaces, abstract classes, and utilities used by more than one component.',
+    statement:
+      'Shared code goes into its own leaf component, never into the parent namespace of the components that use it. Reserve one suffix for it and use that suffix for nothing else. Keep shared domain logic — notification, formatting, validation — apart from shared infrastructure — logging, metrics, security: the first is business logic common to some components, the second is operational and common to all of them.',
+    rationale:
+      'A suffix used for nothing else turns sharing from a feeling into a measurement: what share of the codebase is shared, and across how many components. Approaching 40% is a cohesion problem now, not at some future extraction. And the two kinds of sharing have different futures — infrastructure travels with every deployment unit, shared domain logic has to be assigned to one.',
+    good: 'customer.billing.sharedcode\nplatform.infrastructure.logging',
+    avoid: 'customer.billing/  (interfaces and abstract classes, plus three child packages)',
+  },
+
+  'component-sizing': {
+    number: '0440',
+    title: 'Component size, and how it is judged',
+    scope: 'Component granularity.',
+    statement:
+      'Size a component by the number of statements it holds, not by lines, files, or classes — developers structure classes differently, so only statements approximate how much a component actually does. Aim for a distribution in which no component sits far from the mean. Watch the statements-per-file ratio as well: a component of perfectly average size held in two files is hiding classes that want splitting. A large component with no discernible internal subdomains is fine as it is; one with obvious subdomains and nobody extracting them is not.',
+    rationale:
+      'The oversized component is almost always also the most coupled and the hardest to change on its own, which makes size a cheap proxy for a problem that is expensive to measure directly. Numeric thresholds only mean something once there are enough components to have a distribution — around ten. Below that, record the intent here and set the numbers when they carry information.',
+  },
+
+  'coupling-budget': {
+    number: '0450',
+    title: 'Coupling is measured in both directions',
+    scope: 'Dependencies between components.',
+    statement:
+      'Track afferent coupling (how many components depend on this one) and efferent coupling (how many it depends on) for each component, and hold a budget on each. Start the budget at the coupling the codebase has today plus one and tighten it over time, rather than starting loose. Before merging duplicated components into one, work out the afferent coupling the merged component would carry and compare it against the sum of the originals.',
+    rationale:
+      'The graph of dependencies between components — ignoring everything internal to them, which may be a tangle without it mattering — is the single most informative picture of an architecture. Removing duplication is not free if what replaces it is something half the system depends on: losing the ability to reason about one component at a time costs more than the duplication bought.',
+  },
+
+  'architecture-stories': {
+    number: '0460',
+    title: 'Structural work is an architecture story',
+    scope: 'Backlog and prioritisation.',
+    statement:
+      'Structural work gets its own backlog item type, distinct from both the user story and the technical-debt ticket: as an architect, I need to decouple X in order to better support Y — where Y is an architectural characteristic or a business need. An item without a stated Y is not an architecture story.',
+    rationale:
+      'Technical debt gets negotiated away because it names no beneficiary. An architecture story names the characteristic it buys, which gives it a priority defensible in the same conversation as a feature.',
+    good: 'As an architect, I need to split the notification component so billing can be deployed without the ticket workflow.',
+    avoid: 'Refactor the notification package (tech debt).',
   },
 };

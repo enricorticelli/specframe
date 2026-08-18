@@ -282,4 +282,39 @@ export const RULES = {
     why: 'Without it, a crash between commit and publish loses the message, or a rollback after publish announces something that never happened.',
     enforcement: 'Code review; the broker client is reachable only from the relay.',
   },
+  'no-source-in-non-leaf-namespace': {
+    number: '0310',
+    title: 'Source code lives only in leaf namespaces',
+    status: 'enforced',
+    statement: 'A namespace with children holds no source files: it is a subdomain, a container. All code belongs to a leaf. Adding a child to a namespace that holds code means moving that code down into a leaf of its own, in the same change.',
+    why: 'It is what makes "component" a definition instead of an opinion. Code stranded in an intermediate node belongs to no component, so no question about its size, coupling, or ownership has a single answer.',
+    enforcement: 'CI check walking the source tree: a non-leaf node containing code fails the build.',
+  },
+
+  'approved-domains-only': {
+    number: '0320',
+    title: 'Only approved domains exist below the root namespace',
+    status: 'enforced',
+    statement: 'The set of top-level domains is declared in one place and every source file resides under one of them. Adding a domain is a decision taken with the product owner, not a side effect of a merge.',
+    why: 'Domains added by inertia, one package at a time, produce a tree that stops describing the business. A component that fits no domain is evidence that the domain model is wrong, not that the tree needs another folder.',
+    enforcement: 'CI check asserting every source file resides in one of the declared domain packages.',
+  },
+
+  'declared-component-dependencies': {
+    number: '0330',
+    title: 'Forbidden dependencies between components stay forbidden',
+    status: 'enforced',
+    statement: 'A component reaches another only where the design allows it, and never into its internals. Each forbidden pair is written down and checked separately.',
+    why: 'Coupling is added one import at a time, always for a good local reason. Naming the edges that must not exist is what keeps the dependency graph a design rather than a record of expedience.',
+    enforcement: 'One CI check per forbidden pair, plus code review.',
+  },
+
+  'namespace-matches-deployment-unit': {
+    number: '0340',
+    title: 'Every deployment unit owns one root namespace',
+    status: 'enforced',
+    statement: 'All code in a deployment unit lives under that unit\'s own root namespace, and no other unit uses it.',
+    why: 'The namespace is the only place a boundary is visible while reading code. When it does not match what ships, the deployment unit becomes an unstructured container and moving code between units stops being mechanical.',
+    enforcement: 'Per-unit CI check asserting its sources reside under its declared root package.',
+  },
 };

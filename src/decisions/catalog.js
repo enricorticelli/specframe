@@ -158,7 +158,11 @@ export const DECISIONS = [
         ],
         tradeoff: 'Most of the independence of microservices at a fraction of the operational cost, but boundaries are coarse and harder to move later.',
         emits: {
-          rules: ['timeouts-and-backoff', 'no-breaking-api-change-without-version'],
+          rules: [
+            'timeouts-and-backoff',
+            'no-breaking-api-change-without-version',
+            'namespace-matches-deployment-unit',
+          ],
           guidelines: ['service-boundaries'],
           runbooks: ['service-degradation'],
           glossary: ['service', 'api-contract'],
@@ -182,6 +186,7 @@ export const DECISIONS = [
             'no-cross-service-db',
             'service-owns-its-data',
             'no-breaking-api-change-without-version',
+            'namespace-matches-deployment-unit',
           ],
           guidelines: ['service-boundaries'],
           runbooks: ['service-degradation'],
@@ -201,7 +206,7 @@ export const DECISIONS = [
         ],
         tradeoff: 'Removes infrastructure work at the cost of platform constraints leaking into application design.',
         emits: {
-          rules: ['timeouts-and-backoff'],
+          rules: ['timeouts-and-backoff', 'namespace-matches-deployment-unit'],
           guidelines: ['serverless-function-design', 'service-boundaries'],
           runbooks: ['service-degradation'],
           glossary: ['service'],
@@ -351,6 +356,208 @@ export const DECISIONS = [
         ],
         tradeoff: 'Fastest to build inside one stack, but not an option for external or polyglot consumers.',
         emits: { glossary: ['api-contract'] },
+      },
+    ],
+  },
+
+  {
+    id: 'component-structure',
+    group: 'architecture',
+    adr: '0130',
+    slug: 'component-structure',
+    title: 'Component structure',
+    question: 'How is the source tree organised?',
+    help: 'Decides whether a directory path tells you what the system does, or which framework it uses.',
+    context:
+      'The namespace tree is the only structure a reader, a reviewer, and a tool can all see without running anything. Whether it expresses business domains or technical roles decides whether a feature lives in one place or crosses the whole tree — and whether "component" is defined precisely enough to be measured at all.',
+    options: [
+      {
+        value: 'domain-leaf',
+        label: 'Domain namespaces, code only in leaves',
+        hint: 'app.customer.billing.payment — intermediate nodes are subdomains and hold no code',
+        recommended: true,
+        statement:
+          'Name namespaces after business domains and subdomains, and keep all source code in leaf nodes. An intermediate node is a container: extending it means moving its code down into a leaf of its own, in the same change.',
+        consequences: [
+          '"Component" gets a mechanical definition, so its size, its coupling, and its owner become answerable without a debate each time.',
+          'A feature\'s change surface is one path in the tree — which is also what an agent needs in order to place a change correctly.',
+          'Every extension of the tree forces a placement decision up front, which is friction exactly when someone would rather not think about it.',
+        ],
+        tradeoff: 'The only option under which component metrics mean anything, paid for with a placement decision on every new namespace.',
+        emits: {
+          rules: [
+            'no-source-in-non-leaf-namespace',
+            'approved-domains-only',
+            'declared-component-dependencies',
+          ],
+          guidelines: ['component-naming'],
+          glossary: ['component'],
+        },
+      },
+      {
+        value: 'domain-flat',
+        label: 'Domain namespaces, no leaf constraint',
+        hint: 'organised by domain, but a node may hold both code and children',
+        statement:
+          'Name namespaces after business domains, and allow a node to hold source code as well as child namespaces.',
+        consequences: [
+          'The tree still describes the business, and a feature still lives mostly in one place.',
+          'Code in intermediate nodes belongs to no component, so size and coupling per component can only be estimated.',
+          'The question "is this a component or a subdomain?" returns on every review.',
+        ],
+        tradeoff: 'Keeps the domain-first tree with less ceremony, but gives up the ability to measure a component.',
+        emits: {
+          rules: ['approved-domains-only', 'declared-component-dependencies'],
+          guidelines: ['component-naming'],
+          glossary: ['component'],
+        },
+      },
+      {
+        value: 'technical-layers',
+        label: 'Technical layers at the top',
+        hint: 'controllers/ services/ repositories/',
+        statement:
+          'Organise the top of the tree by technical role, with domain concepts appearing below it.',
+        consequences: [
+          'Familiar from most framework tutorials, and it is always obvious where a new class of a known kind goes.',
+          'Every feature crosses the whole tree, so no directory tells a reader what the system does.',
+          'Nothing owns a capability, which leaves nothing to extract when part of the system has to move.',
+        ],
+        tradeoff: 'Lowest thinking cost per file, at the price of a structure that says nothing about the business and cannot be decomposed later.',
+        // Deliberately emits nothing: the component rules and guidelines all
+        // presuppose that a namespace names a domain. Emitting them here would
+        // hand the repository documents contradicting its own tree.
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'shared-code',
+    group: 'architecture',
+    adr: '0140',
+    slug: 'shared-code',
+    title: 'Shared code placement',
+    question: 'Where does code shared by several components live?',
+    help: 'Decides whether sharing is something you can count, or something that accumulates in the middle of the tree.',
+    context:
+      'Interfaces, abstract classes, and utilities used by more than one component have to live somewhere. The instinctive answer is the nearest parent namespace — which is the one placement that makes the share invisible and the parent impossible to extract.',
+    options: [
+      {
+        value: 'dedicated-component',
+        label: 'A shared component of its own',
+        hint: 'customer.billing.sharedcode — a suffix reserved for this and nothing else',
+        recommended: true,
+        statement:
+          'Put shared code in its own leaf component, under a suffix reserved for that purpose and used for nothing else.',
+        consequences: [
+          'The reserved suffix makes the share countable: what percentage of the codebase is shared, and across how many components.',
+          'Shared code has an owner and a coupling budget like any other component.',
+          'It is one more component for every domain that shares anything, and the suffix has to be defended in review.',
+        ],
+        tradeoff: 'The only placement that makes sharing measurable, at the cost of extra components and a naming convention to uphold.',
+        emits: {
+          guidelines: ['shared-code-placement'],
+          glossary: ['shared-code'],
+        },
+      },
+      {
+        value: 'shared-library',
+        label: 'A versioned shared library',
+        hint: 'published as a dependency, consumed like any third-party package',
+        statement:
+          'Publish shared code as a versioned library and consume it as a dependency.',
+        consequences: [
+          'The boundary is enforced by the packaging system rather than by review, and consumers upgrade on their own schedule.',
+          'Every change becomes a release plus an upgrade in each consumer, which is slow while the interfaces are still moving.',
+          'Version skew becomes possible: two components can be running different shared behaviour at the same time.',
+        ],
+        tradeoff: 'The strongest boundary and independent upgrades, paid for with release overhead and version skew.',
+        emits: {
+          guidelines: ['shared-code-placement'],
+          glossary: ['shared-code'],
+        },
+      },
+      {
+        value: 'duplicate',
+        label: 'Do not share — duplicate',
+        statement:
+          'Share nothing between components: each keeps its own copy and is free to let it diverge.',
+        consequences: [
+          'Components stay independent, and a change to one cannot break another.',
+          'A fix has to be applied in every copy, and the copies drift silently in the meantime.',
+        ],
+        tradeoff: 'Maximum independence between components, paid for with every fix applied several times over.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'architecture-governance',
+    group: 'architecture',
+    adr: '0150',
+    slug: 'architecture-governance',
+    title: 'Structural governance',
+    question: 'How is structural erosion detected?',
+    help: 'Decides whether the structure recorded above describes the repository, or only the day it was scaffolded.',
+    context:
+      'Structure degrades one justified exception at a time, and nothing in an ordinary build notices. Whether that erosion becomes visible while reversing it is still cheap depends entirely on something running on every change.',
+    options: [
+      {
+        value: 'fitness-functions',
+        label: 'Automated fitness functions in CI',
+        hint: 'structural checks block; metric checks alert',
+        recommended: true,
+        statement:
+          'Run structural checks in the pipeline: component inventory, namespace constraints, forbidden dependencies, size distribution, and coupling. The binary structural checks fail the build; the metric ones alert without blocking.',
+        consequences: [
+          'Introduced on a clean codebase the checks start green and act as a ratchet: the structure can hold or improve, but not quietly degrade.',
+          'The component inventory makes every new component a visible decision rather than a side effect of a merge.',
+          'Metric checks need a population of components before their thresholds carry information, so they alert rather than block and their numbers are set later.',
+        ],
+        tradeoff: 'The only option that catches erosion while reversing it is still cheap, at the cost of pipeline work and tolerance for alerts that are sometimes noise.',
+        emits: {
+          guidelines: ['component-sizing', 'coupling-budget', 'architecture-stories'],
+          glossary: [
+            'fitness-function',
+            'statement-count',
+            'afferent-coupling',
+            'efferent-coupling',
+            'architecture-story',
+          ],
+        },
+      },
+      {
+        value: 'review',
+        label: 'Code review against written constraints',
+        statement:
+          'Rely on code review, with the structural constraints written down so review has something specific to check against.',
+        consequences: [
+          'Nothing to build, and a reviewer can weigh an exception no automated check could judge.',
+          'Coverage depends on who reviews and how much time they have — and slow drift is exactly what review is worst at seeing.',
+        ],
+        tradeoff: 'Free to start and able to judge exceptions, but blind to erosion that arrives a little at a time.',
+        emits: {
+          guidelines: ['component-sizing', 'coupling-budget', 'architecture-stories'],
+          glossary: [
+            'statement-count',
+            'afferent-coupling',
+            'efferent-coupling',
+            'architecture-story',
+          ],
+        },
+      },
+      {
+        value: 'none',
+        label: 'No structural governance',
+        statement: 'Do not govern structure; leave it to individual judgement on each change.',
+        consequences: [
+          'Nothing to maintain, and nothing to argue with.',
+          'Structural decay surfaces when a change turns out to be expensive, which is after the cheap window for fixing it has closed.',
+        ],
+        tradeoff: 'No cost now, with the whole cost arriving later as work nobody planned for.',
+        emits: {},
       },
     ],
   },

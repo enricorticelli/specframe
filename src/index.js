@@ -9,6 +9,7 @@ import {
   parseSetFlag,
   validateAnswers,
 } from './answers.js';
+import { BLUEPRINTS, BLUEPRINT_IDS } from './decisions/blueprints.js';
 import { getDecision, isRelevant } from './decisions/catalog.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
@@ -16,7 +17,7 @@ import { readManifest } from './manifest.js';
 import { askQuestions, askRevision, parseAgentTargets, renderReview } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
 import { diffAnswers } from './review.js';
-import { configureTheme, terminalWidth, theme } from './style.js';
+import { configureTheme, terminalWidth, theme, wrapText } from './style.js';
 import {
   decideTemplateSet,
   normalizeConfig,
@@ -36,7 +37,16 @@ async function getVersion() {
 }
 
 // Flags that take a value, in either `--flag value` or `--flag=value` form.
-const VALUE_FLAGS = new Set(['--preset', '--answers', '--set', '--mode', '--name', '--pm', '--agents']);
+const VALUE_FLAGS = new Set([
+  '--preset',
+  '--blueprint',
+  '--answers',
+  '--set',
+  '--mode',
+  '--name',
+  '--pm',
+  '--agents',
+]);
 
 export function parseArgs(argv) {
   const flags = {
@@ -94,6 +104,17 @@ export function parseArgs(argv) {
   return { command, flags };
 }
 
+// The blueprint list in --help. Wrapped at a fixed width rather than the
+// terminal's, so `specframe --help | less` looks the same everywhere the rest
+// of this hand-wrapped text does.
+const HELP_WIDTH = 78;
+const HELP_INDENT = ' '.repeat(21);
+
+function describeBlueprint(blueprint) {
+  const [first, ...rest] = wrapText(blueprint.hint, HELP_WIDTH, HELP_INDENT);
+  return [`  ${blueprint.id.padEnd(19)}${first.trimStart()}`, ...rest].join('\n');
+}
+
 const HELP = `specframe — decision-driven scaffolding for AI-ready repositories.
 
 Usage:
@@ -107,23 +128,32 @@ Usage:
 Everything is written to the root of the repository (the nearest ancestor with
 a .git directory), even when the CLI is run from a subdirectory.
 
-Init has two modes:
-  blank    Every template plus its filling instructions, and the full decision
-           backlog in docs/DECISIONS.md. No decisions taken.
-  guided   Answer decisions from the catalog. Each one becomes an ADR plus the
-           rules, guidelines, runbooks and glossary terms it implies. Enter
-           takes the recommended option; s leaves a question, or a whole
-           section, open. Nothing is written before you see the review table.
+Init has three ways in:
+  blank      Every template plus its filling instructions, and the full decision
+             backlog in docs/DECISIONS.md. No decisions taken.
+  blueprint  Pick a known architecture and walk the guided pass with its
+             decisions already answered — a starting position to argue with.
+  guided     Answer decisions from the catalog. Each one becomes an ADR plus the
+             rules, guidelines, runbooks and glossary terms it implies. Enter
+             takes the recommended option; s leaves a question, or a whole
+             section, open. Nothing is written before you see the review table.
 
 Init options:
       --preset <id>   ${PRESET_IDS.join(' | ')}
                       Seeds the wizard; with --yes it runs unattended.
+      --blueprint <id>
+                      An architecture archetype, listed at the bottom. Seeds
+                      the wizard with the way that architecture answers the
+                      catalog. Combines with --preset: the posture applies
+                      everywhere, the blueprint wins on the decisions that
+                      are the shape.
       --set k=v,...   Answer decisions directly, e.g.
                       --set architecture-style=microservices,tdd=strict
                       Repeatable. Overrides --preset and --answers.
       --answers FILE  JSON of { "decision-id": "option-value" }, or a saved
                       .specframe/manifest.json to replay another repo's setup.
-      --mode MODE     blank | guided. Skips the mode question.
+      --mode MODE     blank | guided | blueprint. Skips the mode question;
+                      blueprint goes straight to the archetype list.
   -y, --yes           No prompts. Unanswered decisions in guided mode take
                       their recommended option.
       --name NAME     Project name (default: directory name).
@@ -137,7 +167,8 @@ Init options:
 
 Decide options:
   -n, --dry-run    Show what would be written.
-      --set / --answers / --preset / --yes / --detected  as for init.
+      --set / --answers / --preset / --blueprint / --yes / --detected
+                   as for init. A blueprint only answers what is still open.
 
 Review options:
       --open       Only the decisions still open.
@@ -166,8 +197,11 @@ Common options:
       --no-color   Plain output. NO_COLOR=1 and a non-TTY do the same;
                    SPECFRAME_ASCII=1 also drops the box drawing.
 
-Presets:
+Presets — how demanding the defaults are:
 ${PRESET_IDS.map((id) => `  ${id.padEnd(9)} ${PRESETS[id].description}`).join('\n')}
+
+Blueprints — the shape of the system:
+${BLUEPRINTS.map(describeBlueprint).join('\n')}
 
 On update, files you own (docs, ADRs, CLAUDE.md, …) are never overwritten.
 A managed file you edited by hand is kept; the new version lands beside it as
@@ -205,6 +239,7 @@ async function runInit(cwd, version, flags) {
 
   const sources = await collectAnswerSources({
     preset: flags.preset,
+    blueprint: flags.blueprint,
     answersFile: flags.answers,
     set: flags.set,
   });
@@ -212,8 +247,8 @@ async function runInit(cwd, version, flags) {
   reportInvalidAnswers(invalid);
 
   const mode = flags.mode ?? sources.mode;
-  if (mode && mode !== 'blank' && mode !== 'guided') {
-    throw new Error(`Unknown --mode: ${mode}. Expected blank or guided.`);
+  if (mode && mode !== 'blank' && mode !== 'guided' && mode !== 'blueprint') {
+    throw new Error(`Unknown --mode: ${mode}. Expected blank, guided or blueprint.`);
   }
   if (mode === 'blank' && Object.keys(valid).length > 0) {
     console.warn(
@@ -223,15 +258,31 @@ async function runInit(cwd, version, flags) {
   }
 
   const unattended = flags.yes || !process.stdin.isTTY;
-  if (unattended && !flags.yes && !flags.preset && !flags.set && !flags.answers && !flags.mode) {
+  if (
+    unattended &&
+    !flags.yes &&
+    !flags.preset &&
+    !flags.blueprint &&
+    !flags.set &&
+    !flags.answers &&
+    !flags.mode
+  ) {
     throw new Error(
       'Not running on a terminal, and no answers were supplied.\n' +
-        'Pass --mode blank for the template set, or --preset/--set/--yes to configure it.',
+        'Pass --mode blank for the template set, or --preset/--blueprint/--set/--yes to configure it.',
     );
   }
 
   let config;
   if (unattended) {
+    // `blueprint` is a screen, not a configuration: off a terminal there is
+    // nobody to pick one, so say which flag carries the same intent.
+    if (mode === 'blueprint') {
+      throw new Error(
+        'Not running on a terminal, so there is no blueprint to pick.\n' +
+          `Pass --blueprint <id> instead: ${BLUEPRINT_IDS.join(', ')}.`,
+      );
+    }
     const resolvedMode = mode ?? 'blank';
     config = {
       projectName: flags.name ?? currentDirName(targetDir),
@@ -244,6 +295,7 @@ async function runInit(cwd, version, flags) {
     console.log(
       `Running unattended: mode ${resolvedMode}` +
         (flags.preset ? `, preset ${flags.preset}` : '') +
+        (flags.blueprint ? `, blueprint ${flags.blueprint}` : '') +
         '.',
     );
   } else {
@@ -305,6 +357,7 @@ async function runDecide(cwd, version, flags) {
 
   const sources = await collectAnswerSources({
     preset: flags.preset,
+    blueprint: flags.blueprint,
     answersFile: flags.answers,
     set: flags.set,
   });
@@ -331,7 +384,7 @@ async function runDecide(cwd, version, flags) {
     if (Object.keys(fresh).length === 0 && !flags.yes) {
       throw new Error(
         'Not running on a terminal, and no answers were supplied.\n' +
-          'Pass --set/--answers/--preset, or --yes to accept the recommended options.',
+          'Pass --set/--answers/--preset/--blueprint, or --yes to accept the recommended options.',
       );
     }
   } else {

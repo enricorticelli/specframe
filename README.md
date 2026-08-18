@@ -23,7 +23,7 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 **specframe flips that around.** It scaffolds a decision-first structure in seconds and keeps every agent's tooling wired to it. Your architecture decisions, rules, conventions, runbooks and glossary *are* the source of truth — and every AI agent (Claude, Copilot, Codex, Gemini, Continue, Amazon Q) is pointed straight at them.
 
 - 🎯 **Decision-driven.** ADRs capture *what & why*, rules capture *what's non-negotiable*, guidelines capture *how you build*, runbooks capture *what to do when it breaks*, the glossary keeps *what words mean here*. Agents read intent instead of reverse-engineering it.
-- 🧭 **Two ways in.** A **blank** log with every template and how to fill it, or a **guided** pass over 39 architecture decisions where each answer becomes an ADR plus the rules it implies. Skip a section with one key; what you skip stays tracked as open.
+- 🧭 **Three ways in.** A **blank** log with every template and how to fill it, a **guided** pass over 42 architecture decisions where each answer becomes an ADR plus the rules it implies, or a **blueprint** — pick the architecture you already have in mind and walk that same pass with its answers already in place. Skip a section with one key; what you skip stays tracked as open.
 - 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical. Every agent's native config is a thin pointer back — no more syncing five instruction files by hand.
 - 🤖 **Broad agent support.** Claude, Copilot and Codex get full subagents, slash commands and skills in each tool's *current* convention. Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Jules and more read `AGENTS.md` natively — nothing extra needed.
@@ -63,19 +63,46 @@ npm install -g specframe     # then: specframe
 
 Requires **Node.js ≥ 18**. specframe always scaffolds at the **repo root** (nearest ancestor with `.git`), even from a deep subdirectory. No `.git`? It warns and falls back to the current folder — run `git init` first for a real repo.
 
-After the project name, package manager and agent assistants, you pick one of **two modes**.
+After the project name, package manager and agent assistants, you pick one of **three ways in**.
 
 ### Blank — templates only
 
-Every section index, a `0000-template.md` with field-by-field instructions, one worked example per section, `docs/README.md` explaining what belongs where — and `docs/DECISIONS.md` listing all 39 catalog decisions as open, each with its options and a reserved ADR number.
+Every section index, a `0000-template.md` with field-by-field instructions, one worked example per section, `docs/README.md` explaining what belongs where — and `docs/DECISIONS.md` listing all 42 catalog decisions as open, each with its options and a reserved ADR number.
 
 Nothing decided for you; nothing left to guess about *how* to decide.
+
+### Blueprint — start from a known architecture
+
+Forty-two questions from a blank map is a lot to ask of someone who already knows they're building microservices. Pick the archetype instead:
+
+```
+  1) Layered CRUD application    one deployable, controllers/services/repositories, relational
+  2) Modular monolith            enforced module boundaries, domain-shaped tree
+  3) Domain-driven hexagonal     ports and adapters around a full domain model
+  4) Service-based               coarse services over one shared database
+  5) Event-driven microservices  a database each, async messaging, choreographed sagas
+  6) Event sourcing and CQRS     the event log is the system of record
+  7) Serverless functions        managed runtime per function, previews per change
+```
+
+A blueprint answers the decisions that *are* the architecture — architecture, design, data — plus the ones its shape forces on you: pick microservices and contract testing, tracing, structured logs and SLOs come with it, because a distributed system without them is a decision too, just an unrecorded one. Everything else is left alone.
+
+Then you walk the guided pass exactly as below, with every blueprint answer showing as `current` and `enter` meaning *keep it*. Nothing is pre-accepted: **a blueprint is a starting position to argue with**, and every pre-answered question is still asked, one at a time, with the alternatives it beat listed under it.
+
+It composes with the presets, because the two answer different questions — the preset is a posture, the blueprint is a shape:
+
+```bash
+npx specframe --blueprint microservices              # seed the wizard
+npx specframe --blueprint event-sourcing --preset strict --yes
+```
+
+Where they overlap, the blueprint wins; `--set` still beats both.
 
 ### Guided — answer decisions now
 
 Each answer becomes an **ADR** — including the alternatives you rejected and why — plus the **rules**, **guidelines**, **runbooks** and **glossary terms** it implies, cross-linked both ways. Answer `microservices` and you get the ADR, `R-0090 No service reads another service's database`, a service-boundary guideline, a degradation runbook, and the terms to match.
 
-39 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
+42 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
 
 **`enter` takes the recommended option** — the one marked ★, named in the prompt so you can see what you're accepting. Hold enter down and you get the `balanced` preset one visible answer at a time. On a second pass over a question you've already answered, enter *keeps* your answer instead.
 
@@ -93,11 +120,14 @@ Thirty-odd decisions is more than anyone holds in their head, so nothing is writ
 ┌────┬──────────────────────────────┬────────────────────────┬─────┬──────┐
 │  # │ Decision                     │ Choice                 │ Rec │ ADR  │
 ├────┼──────────────────────────────┼────────────────────────┼─────┼──────┤
-│ Architecture                                        2 of 3 answered     │
+│ Architecture                                        5 of 6 answered     │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  1 │ Architecture style           │ Microservices          │     │ 0100 │
 │  2 │ Inter-component comm         │ Async messaging        │  *  │ 0110 │
 │  3 │ External API style           │ not decided            │     │  —   │
+│  4 │ Component structure          │ Domain, leaves only    │  *  │ 0130 │
+│  5 │ Shared code placement        │ Shared component       │  *  │ 0140 │
+│  6 │ Structural governance        │ Fitness functions      │  *  │ 0150 │
 └────┴──────────────────────────────┴────────────────────────┴─────┴──────┘
 ```
 
@@ -110,16 +140,19 @@ Row numbers follow the catalog, so they're stable; changing an answer that gates
 ```bash
 npx specframe --preset balanced --yes    # every recommended option
 npx specframe --preset strict --yes      # strict TDD, 80% coverage, 2 reviewers, GDPR
+npx specframe --blueprint serverless --yes            # a shape, then the recommendations
+npx specframe --blueprint microservices --preset strict --yes
 npx specframe --set architecture-style=microservices,event-sourcing=yes
 npx specframe --answers ./decisions.json # or another repo's manifest.json
 ```
 
 | Flag | Effect |
 | --- | --- |
-| `--preset blank\|balanced\|strict` | Seeds the wizard; with `--yes`, runs unattended. |
-| `--set k=v,...` | Answer directly. Repeatable. Beats `--preset` and `--answers`. |
+| `--preset blank\|balanced\|strict` | The posture. Seeds the wizard; with `--yes`, runs unattended. |
+| `--blueprint <id>` | The shape. `crud`, `modular-monolith`, `hexagonal`, `service-based`, `microservices`, `event-sourcing`, `serverless`. Beats `--preset` where they overlap. |
+| `--set k=v,...` | Answer directly. Repeatable. Beats `--preset`, `--blueprint` and `--answers`. |
 | `--answers FILE` | JSON map, or a saved `.specframe/manifest.json` to replay a setup. |
-| `--mode blank\|guided` | Skip the mode question. |
+| `--mode blank\|guided\|blueprint` | Skip the mode question. |
 | `-y, --yes` | No prompts; unanswered decisions take their recommended option. |
 | `--detected` | These decisions are already implemented — see below. |
 | `--name` · `--pm` · `--agents` | Project name, package manager, agent targets. |
