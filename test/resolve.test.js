@@ -36,6 +36,19 @@ test('an ADR carries every option that was not chosen', () => {
   assert.equal(values.length, 4);
 });
 
+test('a repository that stores nothing has no data section to answer', () => {
+  // The point of the option: retiring the questions is not the same as
+  // answering them nominally. A static site with an ADR saying "forward-only
+  // migrations" is a decision nobody took about a schema that does not exist.
+  const resolved = guided({ persistence: 'none', migrations: 'up-down' });
+  const open = resolved.open.map((o) => o.decision.id);
+  for (const id of ['data-ownership', 'event-sourcing', 'cqrs', 'distributed-transactions', 'migrations']) {
+    assert.ok(!open.includes(id), `${id} is still open on a repository that stores nothing`);
+  }
+  assert.deepEqual(resolved.notApplicable.map((n) => n.decision.id), ['migrations']);
+  assert.deepEqual(pathsOf(resolved.adrs), ['docs/adr/0300-persistence.md']);
+});
+
 test('a document required by two decisions is written once, citing both', () => {
   const resolved = guided({
     'architecture-style': 'microservices',

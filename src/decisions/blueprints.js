@@ -225,7 +225,100 @@ export const BLUEPRINTS = [
       environments: 'ephemeral-preview',
     },
   },
+  {
+    id: 'spa-api',
+    label: 'Single-page application and API',
+    hint: 'a client-rendered interface deployed on its own, a modular monolith behind it — the two-team default',
+    description:
+      'The interface is a static bundle rendered in the browser and deployed independently; the API is a modular monolith it talks to over REST. Server data lives in a query cache with an explicit freshness policy, client state stays local or in the URL. The cleanest split between a frontend and a backend team, paid for with a first paint that waits on a script and a document with no content in it.',
+    answers: {
+      'architecture-style': 'modular-monolith',
+      'api-style': 'rest',
+      'component-structure': 'domain-leaf',
+      'shared-code': 'dedicated-component',
+      'architecture-governance': 'fitness-functions',
+      layering: 'clean',
+      ddd: 'tactical',
+      'design-patterns': 'yes',
+      'dependency-injection': 'manual',
+      'error-handling': 'typed-errors',
+      persistence: 'relational',
+      'event-sourcing': 'no',
+      cqrs: 'read-model-only',
+      migrations: 'versioned-forward-only',
+      // The interface is the archetype here, so its shape is answered and its
+      // posture — accessibility level, translation, budgets — is not.
+      'ui-surface': 'web-app',
+      'rendering-strategy': 'client-rendered',
+      'ui-composition': 'presentation-and-feature',
+      'design-system': 'headless-plus-tokens',
+      'client-state': 'server-cache',
+      styling: 'utility-classes',
+    },
+  },
+  {
+    id: 'ssr-fullstack',
+    label: 'Server-rendered full-stack application',
+    hint: 'one deployable that renders its own interface, loading data per route on the server',
+    description:
+      'Interface and backend in one deployable, with the rendering mode chosen per route and data loaded on the server by the route that needs it. Almost no data-handling code reaches the browser and there is no client cache to invalidate; in exchange the interface is bound to one framework\'s conventions and the server is now part of its availability.',
+    answers: {
+      'architecture-style': 'modular-monolith',
+      'api-style': 'rest',
+      'component-structure': 'domain-leaf',
+      'shared-code': 'shared-library',
+      'architecture-governance': 'review',
+      layering: 'layered',
+      ddd: 'none',
+      'design-patterns': 'no',
+      'dependency-injection': 'manual',
+      'error-handling': 'typed-errors',
+      persistence: 'relational',
+      'event-sourcing': 'no',
+      cqrs: 'no',
+      migrations: 'versioned-forward-only',
+      'ui-surface': 'web-app',
+      'rendering-strategy': 'hybrid',
+      'ui-composition': 'feature-first',
+      'design-system': 'headless-plus-tokens',
+      // Data is fetched by the route, so there is no second copy in the browser
+      // to keep fresh — which is the whole reason to render on the server.
+      'client-state': 'server-owned',
+      styling: 'utility-classes',
+    },
+  },
+
+  {
+    id: 'content-site',
+    label: 'Content site',
+    hint: 'pages generated at build time from content, served as files — marketing, documentation, editorial',
+    description:
+      'No store, no session, no server at request time: pages are generated from content at build time and served as files. The fastest and cheapest thing to operate, and the shape that makes the whole data section disappear rather than answering it nominally. It has nowhere to put application behaviour, which is the moment to stop using it.',
+    answers: {
+      'architecture-style': 'monolith',
+      'component-structure': 'domain-flat',
+      'shared-code': 'dedicated-component',
+      'architecture-governance': 'review',
+      layering: 'none',
+      ddd: 'none',
+      'design-patterns': 'no',
+      'dependency-injection': 'none',
+      'error-handling': 'exceptions',
+      // Nothing durable is stored here, which retires ownership, event
+      // sourcing, read models, cross-boundary consistency and migrations. The
+      // data section is not skipped — it does not apply.
+      persistence: 'none',
+      'ui-surface': 'content-site',
+      'rendering-strategy': 'static',
+      'ui-composition': 'atomic',
+      // A content site is where the brand lives, so the base layer is owned
+      // rather than adopted.
+      'design-system': 'own-system',
+      styling: 'css-modules',
+    },
+  },
 ];
+
 
 export const BLUEPRINT_IDS = BLUEPRINTS.map((blueprint) => blueprint.id);
 
@@ -239,7 +332,7 @@ export function isBlueprintId(value) {
 
 // The decisions worth naming when a blueprint is echoed back — enough to
 // recognise the archetype in one line, not a second copy of the review table.
-const HEADLINE = ['architecture-style', 'inter-component-comm', 'layering', 'persistence', 'data-ownership'];
+const HEADLINE = ['architecture-style', 'rendering-strategy', 'inter-component-comm', 'layering', 'persistence', 'data-ownership'];
 
 // "Microservices · Asynchronous messaging · Hexagonal" — built from the
 // catalog's own labels, so renaming an option renames it here too.

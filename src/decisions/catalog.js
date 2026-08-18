@@ -12,7 +12,10 @@
 //   adr         permanent 4-digit ADR number. Lands in docs/adr/<adr>-<slug>.md.
 //               Group ranges: 01xx architecture, 02xx design, 03xx data,
 //               04xx quality, 05xx testing, 06xx security, 07xx observability,
-//               08xx delivery. Steps of 10 leave room to insert. Never reuse.
+//               08xx delivery, 09xx frontend. Steps of 10 leave room to insert.
+//               Never reuse. The range is the group's position in GROUPS, so a
+//               new group is appended — never inserted, which would renumber
+//               every ADR after it in repositories that already have them.
 //   question    asked in the wizard.
 //   help        shown on `?`, and as the "why this matters" line in DECISIONS.md.
 //   context     the ADR's Context section: why the decision exists at all.
@@ -78,6 +81,11 @@ export const GROUPS = [
     title: 'Delivery',
     blurb: 'Branching, commits, review policy, CI gates, releases, environments.',
   },
+  {
+    id: 'frontend',
+    title: 'User interface',
+    blurb: 'Rendering, composition, state, styling, accessibility, and the budget.',
+  },
 ];
 
 // Architecture styles with more than one deployment unit. Follow-up questions
@@ -89,6 +97,22 @@ const DISTRIBUTED_STYLES = new Set(['service-based', 'microservices', 'serverles
 const isDistributed = (answers) => {
   const style = answers['architecture-style'];
   return !style || DISTRIBUTED_STYLES.has(style);
+};
+
+// A repository that stores nothing durable has no storage model to choose, and
+// none of the questions that only exist because there is one.
+const persists = (answers) => answers.persistence !== 'none';
+
+// Whether this repository ships a user interface at all. Everything in the
+// frontend section is gated on it — and, per the `when` contract, stays
+// relevant while it is unanswered.
+const hasUi = (answers) => answers['ui-surface'] !== 'none';
+
+// A content site has no session and no state worth a model, so the questions
+// that only make sense for an application are retired for it.
+const isApplicationUi = (answers) => {
+  const surface = answers['ui-surface'];
+  return !surface || surface === 'web-app';
 };
 
 const usesMessaging = (answers) => {
@@ -909,6 +933,20 @@ export const DECISIONS = [
           glossary: ['eventual-consistency'],
         },
       },
+      {
+        value: 'none',
+        label: 'No persistence here',
+        hint: 'this repository stores nothing durable of its own',
+        statement:
+          'Store nothing durable in this repository. Whatever state it needs belongs to a service it calls, to the build that produced it, or to the client.',
+        consequences: [
+          'Every question that only exists because data is owned — ownership, event sourcing, read models, migrations — is retired rather than answered nominally.',
+          'There is no schema to migrate and no backup to own, so deployment is a file copy and a rollback is the previous one.',
+          'The first feature that has to remember something reopens this decision, and it should: a store acquired quietly is how a site ends up with a database nobody planned.',
+        ],
+        tradeoff: 'Nothing to operate and nothing to migrate; the moment something must be remembered, this decision comes back.',
+        emits: {},
+      },
     ],
   },
 
@@ -922,7 +960,7 @@ export const DECISIONS = [
     help: 'The single decision that determines whether services can actually be deployed independently.',
     context:
       'Independent deployment is possible only when services do not share a schema. Whatever the intention, a shared database makes the boundary decorative.',
-    when: isDistributed,
+    when: (answers) => isDistributed(answers) && persists(answers),
     options: [
       {
         value: 'db-per-service',
@@ -965,6 +1003,7 @@ export const DECISIONS = [
     help: 'Storing every change instead of the current state buys a complete history and costs you queryability.',
     context:
       'Persisting current state discards how it was reached. Event sourcing keeps the full sequence as the system of record and derives state from it, which is powerful and materially more expensive.',
+    when: persists,
     options: [
       {
         value: 'yes',
@@ -1010,6 +1049,7 @@ export const DECISIONS = [
     help: 'Separating the paths lets each be shaped for its job; it also means reads are behind writes.',
     context:
       'Reads and writes have different shapes, different volumes, and different consistency needs. Serving both from one model is simple until one of those diverges enough to hurt.',
+    when: persists,
     options: [
       {
         value: 'full',
@@ -1070,7 +1110,7 @@ export const DECISIONS = [
     help: 'Once a workflow crosses a boundary there is no shared transaction. This decides what replaces it.',
     context:
       'A change spanning two owners cannot be atomic. What remains is a choice about where the coordination lives and how partial failure is repaired.',
-    when: isDistributed,
+    when: (answers) => isDistributed(answers) && persists(answers),
     options: [
       {
         value: 'outbox',
@@ -1150,6 +1190,7 @@ export const DECISIONS = [
     help: 'Decides whether a deploy can be rolled back after the schema has moved.',
     context:
       'Schema and code are deployed on different mechanisms but must agree at every moment, including during a rollback. The migration policy is what keeps that true.',
+    when: persists,
     options: [
       {
         value: 'versioned-forward-only',
@@ -2425,6 +2466,825 @@ export const DECISIONS = [
           guidelines: [{ slug: 'environment-promotion', vars: { style: 'Provision a disposable environment per change for review; production is deployed on merge.' } }],
           runbooks: ['deploy-and-rollback'],
           glossary: ['environment', 'release'],
+        },
+      },
+    ],
+  },
+
+  // ------------------------------------------------------------------ frontend
+  {
+    id: 'ui-surface',
+    group: 'frontend',
+    adr: '0900',
+    slug: 'user-interface-surface',
+    title: 'User interface surface',
+    question: 'What user interface does this repository ship?',
+    help: 'Decides whether the interface questions apply here at all — and whether this repository ships code to a machine it does not own.',
+    context:
+      'A repository that serves a browser has a second runtime: code delivered to a device nobody here controls, over a network nobody here can assume, to a person who may not be looking at the screen. That runtime has its own failure modes, its own security boundary, and its own set of decisions. Recording whether it exists here is what makes the questions that follow either necessary or noise.',
+    options: [
+      {
+        value: 'web-app',
+        label: 'Web application',
+        hint: 'interactive, session-bearing, backed by an API',
+        recommended: true,
+        statement:
+          'This repository ships an interactive web application: sessions, client-side behaviour, and data read from an API at run time.',
+        consequences: [
+          'Rendering, state, styling and accessibility become recorded decisions rather than per-screen improvisation.',
+          'The browser is an untrusted runtime: every authorisation decision the interface expresses must also be enforced by the API.',
+          'Releases reach users through caches — a build that is broken is broken for everyone holding it until it is invalidated.',
+        ],
+        tradeoff: 'The full set of interface decisions applies, in exchange for a client the team actually controls.',
+        emits: {
+          rules: ['no-secrets-in-client-bundle'],
+          runbooks: ['broken-frontend-release'],
+          glossary: ['ui-component'],
+        },
+      },
+      {
+        value: 'content-site',
+        label: 'Content site',
+        hint: 'pages produced from content, little state beyond navigation',
+        statement:
+          'This repository ships a content-driven site: pages generated from content, with no long-lived client session and no state model beyond navigation.',
+        consequences: [
+          'Composition, styling and accessibility still apply; the questions about client state do not, and are retired.',
+          'Discoverability and first paint are the properties that matter, which pushes rendering towards build time.',
+          'The content source becomes a dependency of the build, so a content change is a deploy unless it is fetched at request time.',
+        ],
+        tradeoff: 'A much smaller set of interface decisions, at the cost of having nowhere to put genuine application behaviour later.',
+        emits: {
+          rules: ['no-secrets-in-client-bundle'],
+          runbooks: ['broken-frontend-release'],
+          glossary: ['ui-component'],
+        },
+      },
+      {
+        value: 'none',
+        label: 'No user interface',
+        hint: 'a service, a library, or a command-line tool',
+        statement:
+          'This repository ships no user interface. Any interface that consumes it lives in another repository and records its own decisions there.',
+        consequences: [
+          'The whole interface section is retired here, and nothing about rendering or styling is implied for consumers.',
+          'The API is the entire contract with the outside world, so its versioning and its documentation carry weight they would otherwise share.',
+          'An interface added here later reopens this decision rather than arriving without one.',
+        ],
+        tradeoff: 'Nothing to decide about the browser; the interface decisions still exist, they are just somebody else\'s.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'rendering-strategy',
+    group: 'frontend',
+    adr: '0910',
+    slug: 'rendering-strategy',
+    title: 'Rendering strategy',
+    question: 'Where is the interface rendered?',
+    when: hasUi,
+    help: 'Decides what arrives in the first response — markup, or a script that will go and get some.',
+    context:
+      'Where markup is produced settles first paint, crawlability, and how much work a device the team never sees has to do before anything is usable. It also decides where data is fetched from, and therefore which parts of the system need to be reachable from a browser at all. It is the interface decision that is most expensive to reverse, because the framework, the hosting, and the data layer are all chosen to fit it.',
+    options: [
+      {
+        value: 'client-rendered',
+        label: 'Client-rendered',
+        hint: 'a shell plus scripts; the browser builds every screen',
+        statement:
+          'Serve a minimal document and render every screen in the browser, fetching data from the API at run time.',
+        consequences: [
+          'The interface deploys as static files, independently of the API, and the two can be owned by different teams.',
+          'The first screen costs a script download, a parse, and at least one request before anything meaningful is visible.',
+          'Anything that must be indexed or shared with a preview needs a separate answer, because the first response contains no content.',
+        ],
+        tradeoff: 'The simplest deployment and the cleanest split from the backend; the slowest first paint and the weakest discoverability.',
+        emits: {
+          guidelines: [
+            { slug: 'rendering-and-caching', vars: { strategy: 'Every screen is rendered in the browser. The document is a shell; data arrives from the API after the application has started.' } },
+          ],
+        },
+      },
+      {
+        value: 'server-rendered',
+        label: 'Server-rendered',
+        hint: 'markup produced per request, then made interactive',
+        statement:
+          'Render markup on the server for each request and hydrate it in the browser to make it interactive.',
+        consequences: [
+          'Content is present in the first response, so it is indexable, previewable, and readable before any script runs.',
+          'Rendering now costs server capacity per request, and the server becomes part of the interface\'s availability.',
+          'Hydration is a second cost after paint: the page can be visible and not yet operable, which is worse than either state alone.',
+        ],
+        tradeoff: 'The best first impression for content that changes per request; a server to run and a hydration cost to manage.',
+        emits: {
+          guidelines: [
+            { slug: 'rendering-and-caching', vars: { strategy: 'Markup is produced on the server for each request and hydrated in the browser. Anything personal to the request is rendered per request and never cached in a shared cache.' } },
+          ],
+          glossary: ['hydration'],
+        },
+      },
+      {
+        value: 'static',
+        label: 'Statically generated',
+        hint: 'pages produced at build time and served from a CDN',
+        statement:
+          'Generate pages at build time and serve them as files, rebuilding when the content that produced them changes.',
+        consequences: [
+          'Serving is a file read from a CDN: the fastest and cheapest response available, with no runtime to fail.',
+          'Content freshness is bounded by build frequency, so a change is a deploy unless a revalidation mechanism is added.',
+          'Anything personal to the visitor has to arrive afterwards, from the client, which reintroduces a request on the pages that need it.',
+        ],
+        tradeoff: 'Unbeatable to serve and to operate; unsuited to anything that differs per visitor.',
+        emits: {
+          guidelines: [
+            { slug: 'rendering-and-caching', vars: { strategy: 'Pages are generated at build time and served as files. A page that needs to differ per visitor fetches that part from the client rather than becoming dynamic.' } },
+          ],
+        },
+      },
+      {
+        value: 'hybrid',
+        label: 'Hybrid, decided per route',
+        hint: 'static where it can be, server where it must be, client where it is genuinely interactive',
+        recommended: true,
+        statement:
+          'Choose the rendering mode per route: static by default, server-rendered where the response depends on the request, client-rendered only for genuinely interactive regions.',
+        consequences: [
+          'Each route pays only the cost its content actually requires, which is the cheapest correct answer across a mixed application.',
+          'The mode becomes a property of every route that someone has to know and state — an unstated route inherits whatever the framework defaults to.',
+          'It commits the repository to a framework that supports all three modes, and to keeping up with how that framework expresses them.',
+        ],
+        tradeoff: 'The best outcome per route, paid for with a decision per route and a framework that owns the answer.',
+        emits: {
+          guidelines: [
+            { slug: 'rendering-and-caching', vars: { strategy: 'Rendering mode is chosen per route: static unless the response depends on the request, server-rendered when it does, client-rendered only for regions that are genuinely interactive. Every route states which mode it uses.' } },
+          ],
+          glossary: ['hydration'],
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'ui-composition',
+    group: 'frontend',
+    adr: '0920',
+    slug: 'ui-composition',
+    title: 'UI composition',
+    question: 'How is the interface tree organised?',
+    when: hasUi,
+    help: 'Decides where a screen is assembled, and which components are allowed to reach the network.',
+    context:
+      'This is about the interface tree, not the source tree: ADR 0130 already decides whether directories express domains or technical roles, and this decides what a component is permitted to know. The line that matters is whether a component can fetch. Once presentation components reach the network they stop being reusable, stop being testable without a server, and start carrying feature knowledge that the next feature has to work around.',
+    options: [
+      {
+        value: 'presentation-and-feature',
+        label: 'Presentation and feature layers',
+        hint: 'dumb components render props, feature components own data',
+        recommended: true,
+        statement:
+          'Split components into a presentation layer that renders from its props and owns no data access, and a feature layer that fetches, coordinates, and composes presentation components.',
+        consequences: [
+          'The presentation layer is reusable across features and testable without a network or a store.',
+          'Where data is fetched is a small, reviewable set of places rather than a property of the whole tree.',
+          'Simple screens carry two components where one would have done, and the boundary needs defending in review.',
+        ],
+        tradeoff: 'The clearest rule about what may fetch; some ceremony on screens that were never going to be reused.',
+        emits: {
+          guidelines: ['ui-component-layering', 'forms-and-validation'],
+          glossary: ['ui-component'],
+        },
+      },
+      {
+        value: 'feature-first',
+        label: 'Feature-first slices',
+        hint: 'each feature owns its components; a shared layer holds what is genuinely common',
+        statement:
+          'Group the interface by feature, with each slice owning its own components, state and data access, and a shared layer holding only what more than one slice genuinely uses.',
+        consequences: [
+          'A feature is added, changed, or deleted in one directory, which keeps the blast radius of a change visible.',
+          'Cross-cutting components have to be promoted deliberately, and the shared layer becomes a dumping ground unless promotion is reviewed.',
+          'Nothing structural stops a component inside a slice from fetching, so that rule has to be carried by review.',
+        ],
+        tradeoff: 'The best locality per feature; the weakest guarantee about what a component may reach.',
+        emits: {
+          guidelines: ['ui-component-layering', 'forms-and-validation'],
+          glossary: ['ui-component'],
+        },
+      },
+      {
+        value: 'atomic',
+        label: 'Atomic hierarchy',
+        hint: 'primitives compose into patterns, patterns into screens',
+        statement:
+          'Organise components as a hierarchy of increasing composition — primitives, patterns, then screens — where a component may only compose from levels below its own.',
+        consequences: [
+          'Composition direction is explicit and checkable, so cycles between components cannot form.',
+          'It maps cleanly onto a design system, and designers and developers can name the same thing.',
+          'Which level a new component belongs to is a recurring argument, and mid-level names tend to stop meaning anything.',
+        ],
+        tradeoff: 'A composition rule a tool can enforce; a taxonomy that needs constant adjudication.',
+        emits: {
+          guidelines: ['ui-component-layering', 'forms-and-validation'],
+          glossary: ['ui-component'],
+        },
+      },
+      {
+        value: 'flat',
+        label: 'Flat',
+        hint: 'components in one place, no layering rule',
+        statement:
+          'Keep components in a single place with no layering rule, and let each one fetch and hold whatever it needs.',
+        consequences: [
+          'Nothing to learn and nothing to argue about while the interface is small.',
+          'Data access spreads to wherever it was first convenient, and extracting a reusable component later means untangling it from the network first.',
+        ],
+        tradeoff: 'No structure to maintain, and none to rely on once the interface outgrows one screen.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'design-system',
+    group: 'frontend',
+    adr: '0930',
+    slug: 'design-system-source',
+    title: 'Design system source',
+    question: 'Where do the base components come from?',
+    when: hasUi,
+    help: 'Decides whether a change to how a button behaves is one edit or a search across the tree.',
+    context:
+      'Every interface has a base layer — the button, the field, the dialog — whether or not anyone decided to have one. What is decided here is who owns it. Owning it costs real work in accessibility and states; adopting one costs the freedom to look unlike it. Not deciding produces the third outcome, which is several base layers that disagree, and a visual change nobody can make in one place.',
+    options: [
+      {
+        value: 'headless-plus-tokens',
+        label: 'Headless primitives, our own styling',
+        hint: 'adopt the behaviour, own the appearance',
+        recommended: true,
+        statement:
+          'Build the base layer on unstyled, accessible primitives from a maintained library, and style them with our own design tokens.',
+        consequences: [
+          'Keyboard interaction, focus management and assistive-technology semantics arrive already solved and already tested.',
+          'The appearance stays entirely ours, and a visual change is a change to the tokens.',
+          'The primitives are still a dependency with its own release cadence, and its composition model has to be learned.',
+        ],
+        tradeoff: 'The hard, invisible part of components is inherited and the visible part stays owned; the cost is a dependency in the middle of the interface.',
+        emits: {
+          rules: ['design-tokens-not-literals'],
+          guidelines: [
+            { slug: 'design-system-usage', vars: { source: 'Base components are built on headless primitives and styled with our design tokens. Use the base component; do not re-implement a primitive the library already provides.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'component-library',
+        label: 'Third-party component library',
+        hint: 'adopt an existing styled system',
+        statement:
+          'Adopt a maintained, styled component library as the base layer and theme it, rather than building base components here.',
+        consequences: [
+          'A complete, coherent interface exists from the first week, including states nobody would have remembered to build.',
+          'The library\'s opinions become the product\'s: how far it can be themed is the ceiling on how distinct the interface can look.',
+          'Upgrades are the team\'s problem on the library\'s schedule, and a component that has been worked around is expensive to leave behind.',
+        ],
+        tradeoff: 'The fastest route to a complete interface, at the price of inheriting somebody else\'s design decisions.',
+        emits: {
+          rules: ['design-tokens-not-literals'],
+          guidelines: [
+            { slug: 'design-system-usage', vars: { source: 'Base components come from the adopted component library, themed through our tokens. Wrap a library component to adapt it; never fork one into the repository.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'own-system',
+        label: 'Our own design system',
+        hint: 'base components and tokens built and maintained here',
+        statement:
+          'Build and maintain the base component layer and its design tokens in this repository, with no third-party component dependency.',
+        consequences: [
+          'Total control of appearance, behaviour and bundle weight, with nothing to upgrade on somebody else\'s schedule.',
+          'Accessibility, focus management and every interaction state are now this team\'s work, permanently and in every component.',
+          'It needs an owner. A design system without one becomes the oldest and least trusted code in the interface.',
+        ],
+        tradeoff: 'Complete control, paid for with the ongoing cost of solving problems that maintained libraries have already solved.',
+        emits: {
+          rules: ['design-tokens-not-literals'],
+          guidelines: [
+            { slug: 'design-system-usage', vars: { source: 'Base components and design tokens are owned in this repository. Every screen composes from the base layer; a screen that needs something new extends the base layer rather than styling around it.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'none',
+        label: 'No base layer',
+        hint: 'each feature builds what it needs',
+        statement:
+          'Do not maintain a base component layer; each feature builds the elements it needs where it needs them.',
+        consequences: [
+          'Nothing to set up, and no shared layer to coordinate while the interface is one or two screens.',
+          'The same control gets built repeatedly with different behaviour, and a change to any of it is a search across the tree.',
+        ],
+        tradeoff: 'No investment now; every visual and accessibility fix is repeated per copy afterwards.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'client-state',
+    group: 'frontend',
+    adr: '0940',
+    slug: 'client-and-server-state',
+    title: 'Client and server state',
+    question: 'How are server data and client state managed?',
+    when: isApplicationUi,
+    help: 'Decides where the truth lives, and whether a cached copy can be edited as though it were the truth.',
+    context:
+      'Two different things get called state. Data fetched from an API is a cached copy of something the client does not own, and it needs a freshness policy. What is selected, expanded or half-typed is owned outright and needs nothing but a place to sit. Merging them into one store is the most common structural mistake in an interface, and the one an assistant reproduces most reliably: every read then has to know which kind it received, and a stale copy becomes indistinguishable from a decision.',
+    options: [
+      {
+        value: 'server-cache',
+        label: 'Server-state cache, local client state',
+        hint: 'a query cache owns remote data; component state and the URL own the rest',
+        recommended: true,
+        statement:
+          'Hold remote data in a dedicated server-state cache with an explicit freshness policy, and keep client state in the components that use it or in the URL.',
+        consequences: [
+          'Loading, error, refetch and invalidation are handled once by the cache instead of being re-implemented per screen.',
+          'The distinction between fetched data and owned data is enforced by which tool holds it, not by convention.',
+          'It is another dependency with its own model, and cache keys become a shared vocabulary that has to be kept consistent.',
+        ],
+        tradeoff: 'The clearest separation between what is cached and what is owned, at the cost of a library everyone has to learn.',
+        emits: {
+          guidelines: [
+            { slug: 'client-state-management', vars: { model: 'Remote data lives in the server-state cache under an explicit key and freshness policy. Client state lives in the component that uses it, or in the URL when it must survive a reload.' } },
+            'loading-and-error-states',
+          ],
+          glossary: ['server-state', 'client-state'],
+        },
+      },
+      {
+        value: 'server-owned',
+        label: 'Server-owned data',
+        hint: 'loaders or server components fetch; the client keeps only what is ephemeral',
+        statement:
+          'Fetch data on the server through route loaders or server components, and keep only ephemeral interaction state in the browser.',
+        consequences: [
+          'There is no client cache to invalidate: a navigation or a submission is what makes data current.',
+          'Far less data-handling code ships to the browser, and the data layer stays out of components entirely.',
+          'It binds the interface to a framework\'s data conventions, and genuinely optimistic interactions need a deliberate escape hatch.',
+        ],
+        tradeoff: 'The least client state of any option; the tightest coupling to one framework\'s way of loading data.',
+        emits: {
+          guidelines: [
+            { slug: 'client-state-management', vars: { model: 'Data is fetched on the server by the route that needs it. The browser holds only ephemeral interaction state; anything that must survive a reload goes in the URL or back to the server.' } },
+            'loading-and-error-states',
+          ],
+          glossary: ['server-state', 'client-state'],
+        },
+      },
+      {
+        value: 'global-store',
+        label: 'One global store',
+        hint: 'a single store holds fetched data and interface state alike',
+        statement:
+          'Hold both fetched data and interface state in a single global store, updated through explicit actions.',
+        consequences: [
+          'One place to inspect, one way to change anything, and a change history that is easy to trace.',
+          'Fetched data loses its freshness semantics: nothing distinguishes a stale copy from a value someone set.',
+          'Every screen contributes to a store that outlives it, and state that should have been local becomes global by default.',
+        ],
+        tradeoff: 'Maximum traceability; the cost is treating a cache as though it were the source of truth.',
+        emits: {
+          guidelines: [
+            { slug: 'client-state-management', vars: { model: 'A single global store holds application state. Fetched data is stored with the metadata that says when it was retrieved, so a stale copy is never mistaken for a value the user set.' } },
+            'loading-and-error-states',
+          ],
+          glossary: ['server-state', 'client-state'],
+        },
+      },
+      {
+        value: 'component-local',
+        label: 'Component-local',
+        hint: 'each component fetches and owns what it displays',
+        statement:
+          'Let each component fetch and hold the data it displays, lifting state only when a sibling needs it.',
+        consequences: [
+          'Nothing to configure, and a component can be read and understood entirely on its own.',
+          'The same resource is fetched repeatedly by different components, and two views of one record drift apart with nothing to reconcile them.',
+        ],
+        tradeoff: 'No machinery at all; no answer either when two parts of a screen show the same thing.',
+        emits: {
+          guidelines: ['loading-and-error-states'],
+          glossary: ['server-state', 'client-state'],
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'styling',
+    group: 'frontend',
+    adr: '0950',
+    slug: 'styling-strategy',
+    title: 'Styling strategy',
+    question: 'How is the interface styled?',
+    when: hasUi,
+    help: 'Decides whether a visual change is one edit or an archaeology exercise.',
+    context:
+      'Styling is where an interface accumulates entropy fastest, because every mechanism works well enough on its own and disastrously in combination. Two systems in one interface means two cascades, two theming stories, and specificity conflicts nobody can resolve locally. This is also the decision an assistant is least likely to infer correctly from surrounding code: it will happily add whichever mechanism it saw most recently.',
+    options: [
+      {
+        value: 'utility-classes',
+        label: 'Utility classes',
+        hint: 'composed from a constrained scale, in the markup',
+        recommended: true,
+        statement:
+          'Style by composing utility classes generated from the design token scale, extracting a component when a combination repeats.',
+        consequences: [
+          'Values are constrained to the scale by construction, so drifting spacing and one-off colours are hard to introduce.',
+          'Styles are deleted with the markup they belong to, so there is no stylesheet outliving its components.',
+          'Markup carries the styling and reads densely, and the only reuse mechanism is extracting a component.',
+        ],
+        tradeoff: 'The strongest guarantee that values stay on the scale; the least readable markup.',
+        emits: {
+          rules: [
+            { slug: 'one-styling-system', vars: { system: 'utility classes generated from the design token scale' } },
+            'design-tokens-not-literals',
+          ],
+          guidelines: [
+            { slug: 'styling-conventions', vars: { system: 'Styling is composed from utility classes generated from the token scale. A combination that repeats becomes a component rather than a copied class list.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'css-modules',
+        label: 'Scoped stylesheets',
+        hint: 'one stylesheet per component, class names scoped at build time',
+        statement:
+          'Write a scoped stylesheet per component, with class names made unique at build time and values referenced from token custom properties.',
+        consequences: [
+          'Ordinary CSS with no runtime cost and no framework coupling, scoped so that no rule can leak into another component.',
+          'The stylesheet lives next to the component and is deleted with it.',
+          'Nothing constrains a value to the token scale except review, so literals creep in one at a time.',
+        ],
+        tradeoff: 'Plain CSS with scoping and no runtime; no constraint on the values that get written.',
+        emits: {
+          rules: [
+            { slug: 'one-styling-system', vars: { system: 'scoped per-component stylesheets, with values referenced from design tokens' } },
+            'design-tokens-not-literals',
+          ],
+          guidelines: [
+            { slug: 'styling-conventions', vars: { system: 'Each component has one scoped stylesheet beside it. Values come from token custom properties rather than literals.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'css-in-js',
+        label: 'Styles in components',
+        hint: 'styles authored in the component language',
+        statement:
+          'Author styles in the component language, colocated with the component and derived from its props where the design genuinely varies.',
+        consequences: [
+          'Styling and markup are one unit, and a variant that depends on state is expressed directly rather than through a class name.',
+          'Tokens are ordinary values, so the type system can check that a colour exists before the build does.',
+          'Depending on the library it costs runtime work per render, and it ties the styling to the component framework permanently.',
+        ],
+        tradeoff: 'The most expressive variants, with a runtime cost and the tightest coupling to the framework.',
+        emits: {
+          rules: [
+            { slug: 'one-styling-system', vars: { system: 'styles authored in the component language, colocated with the component' } },
+            'design-tokens-not-literals',
+          ],
+          guidelines: [
+            { slug: 'styling-conventions', vars: { system: 'Styles are authored in the component language and colocated with the component. Variants are derived from props and tokens, never from a second stylesheet.' } },
+          ],
+          glossary: ['design-token'],
+        },
+      },
+      {
+        value: 'global-stylesheets',
+        label: 'Global stylesheets by convention',
+        hint: 'shared stylesheets with a naming convention for scope',
+        statement:
+          'Write global stylesheets and rely on a naming convention to keep rules from colliding.',
+        consequences: [
+          'No build step and no tooling: the stylesheets can be read, edited, and understood by anyone.',
+          'Scope exists only as long as everyone follows the convention, and dead rules accumulate because nothing links a rule to the markup that needed it.',
+        ],
+        tradeoff: 'The simplest possible setup; the only one where deleting a rule requires proving nothing used it.',
+        emits: {
+          rules: [
+            { slug: 'one-styling-system', vars: { system: 'global stylesheets scoped by naming convention' } },
+          ],
+          guidelines: [
+            { slug: 'styling-conventions', vars: { system: 'Stylesheets are global and scoped by naming convention. A rule names the block it belongs to, and a rule with no markup left behind it is deleted.' } },
+          ],
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'accessibility',
+    group: 'frontend',
+    adr: '0960',
+    slug: 'accessibility-baseline',
+    title: 'Accessibility baseline',
+    question: 'What accessibility level do you commit to?',
+    when: hasUi,
+    help: 'Decides whether accessibility is a constraint on new work or a remediation project later.',
+    context:
+      'Accessibility is a legal requirement in most markets this software is sold into, and it is the only quality attribute that is cheap while a component is being written and expensive in every other moment. Automated tooling finds roughly a third of failures, so the level committed to here decides what review has to carry. An interface generated quickly by an assistant fails in a predictable way: a clickable element that is not a button, an icon with no name, and a focus outline removed for looking untidy.',
+    options: [
+      {
+        value: 'wcag-aa',
+        label: 'WCAG 2.2 AA, gated',
+        hint: 'the level regulation generally references',
+        recommended: true,
+        statement:
+          'Commit to WCAG 2.2 level AA for every user-facing screen, checked automatically in the pipeline and by a keyboard pass in review.',
+        consequences: [
+          'Meets the level European and most other accessibility legislation references, so compliance is a by-product rather than a project.',
+          'Keyboard operability, contrast and accessible names become acceptance criteria for every change, not a phase before launch.',
+          'The automated check covers only part of it: the keyboard and screen-reader pass has to be real review work.',
+        ],
+        tradeoff: 'The defensible level, at the cost of a genuine review step no tool can replace.',
+        emits: {
+          rules: [{ slug: 'wcag-conformance', vars: { level: '2.2 level AA' } }],
+          guidelines: ['accessibility-practices'],
+          glossary: ['accessible-name'],
+        },
+      },
+      {
+        value: 'wcag-aaa',
+        label: 'WCAG 2.2 AAA where applicable',
+        hint: 'AA everywhere, AAA on the criteria that apply',
+        statement:
+          'Commit to WCAG 2.2 level AA throughout and to level AAA for the criteria that apply to this content, checked in the pipeline and in review.',
+        consequences: [
+          'The strongest commitment available, appropriate where the audience is broad or the service is a public duty.',
+          'Some AAA criteria constrain the design directly — contrast, reading level, and the absence of timing — which has to be agreed with design rather than discovered in review.',
+          'AAA is not achievable for all content, so the scope has to be stated per criterion or the commitment is not honest.',
+        ],
+        tradeoff: 'The furthest reach; the design freedom given up is real and has to be agreed up front.',
+        emits: {
+          rules: [{ slug: 'wcag-conformance', vars: { level: '2.2 level AA, and level AAA for the criteria that apply to this content' } }],
+          guidelines: ['accessibility-practices'],
+          glossary: ['accessible-name'],
+        },
+      },
+      {
+        value: 'best-effort',
+        label: 'Practices without a gate',
+        hint: 'follow the practices, do not block a release on them',
+        statement:
+          'Follow accessibility practices as a matter of course, without a conformance level or a blocking check.',
+        consequences: [
+          'The common failures are avoided by anyone who knows about them, at no process cost.',
+          'There is no level to point at when a customer or a regulator asks, and nothing stops a regression from shipping.',
+        ],
+        tradeoff: 'Most of the practice, none of the evidence.',
+        emits: {
+          guidelines: ['accessibility-practices'],
+          glossary: ['accessible-name'],
+        },
+      },
+      {
+        value: 'none',
+        label: 'Not addressed',
+        statement: 'Do not commit to an accessibility level, and do not check for accessibility failures.',
+        consequences: [
+          'Nothing to learn and nothing to check while the interface is being built.',
+          'Every screen becomes remediation work the moment accessibility is required, and remediation costs several times what the constraint would have.',
+        ],
+        tradeoff: 'No cost now; the largest deferred cost of any decision in this section.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'i18n',
+    group: 'frontend',
+    adr: '0970',
+    slug: 'internationalisation',
+    title: 'Internationalisation',
+    question: 'Is the interface internationalised?',
+    when: hasUi,
+    help: 'Decides whether adding a second language is a feature or a rewrite of every screen.',
+    context:
+      'Internationalisation is not a feature that can be added later at its own cost: the work is proportional to the number of screens that exist when it starts, and it touches every one of them. The decision is not which languages to ship — it is whether user-facing text is addressed by key from the first component or hardcoded into it. Formatting is half the problem and the half that is usually forgotten: dates, numbers, currencies, sort order and text direction are locale decisions long before translation is.',
+    options: [
+      {
+        value: 'from-the-start',
+        label: 'Prepared from the start',
+        hint: 'every string by key, one locale shipped today',
+        recommended: true,
+        statement:
+          'Address every user-facing string by key and format every date, number and currency through the locale, while shipping a single locale for now.',
+        consequences: [
+          'A second language becomes a translation job rather than a pass over every component in the repository.',
+          'Formatting bugs that only appear in another region are prevented rather than found later by a user in it.',
+          'It costs an indirection on every string from the first day, for a benefit that may arrive much later or not at all.',
+        ],
+        tradeoff: 'The cheapest possible future translation, paid for with an indirection on text that may never be translated.',
+        emits: {
+          rules: ['no-untyped-user-facing-text'],
+          guidelines: ['i18n-workflow'],
+          glossary: ['locale'],
+        },
+      },
+      {
+        value: 'multi-locale',
+        label: 'Multiple locales in production',
+        hint: 'several languages shipped, with a translation workflow',
+        statement:
+          'Ship several locales, with a translation workflow that keeps catalogues current and a defined behaviour for missing keys.',
+        consequences: [
+          'Language becomes a property of the session, and every layout has to tolerate strings a third longer and a reading direction it did not assume.',
+          'Translation becomes part of the definition of done: a feature is not finished when its strings exist only in the default locale.',
+          'A missing translation needs a stated behaviour — fall back, or show the key — because silently showing English is a decision either way.',
+        ],
+        tradeoff: 'Reaches every market it ships to, with translation permanently inside the delivery loop.',
+        emits: {
+          rules: ['no-untyped-user-facing-text'],
+          guidelines: ['i18n-workflow'],
+          glossary: ['locale'],
+        },
+      },
+      {
+        value: 'single-locale',
+        label: 'One language, inline',
+        hint: 'strings written where they are displayed',
+        statement:
+          'Write user-facing text directly in the components, in one language, with no translation layer.',
+        consequences: [
+          'The text a component displays is visible in the component, which is the shortest path from a copy change to a deploy.',
+          'Adding a language later means touching every screen that exists at that point, and the formatting assumptions are the part nobody finds.',
+        ],
+        tradeoff: 'Nothing to set up and nothing to indirect through; a second language costs a pass over the entire interface.',
+        emits: {},
+      },
+    ],
+  },
+
+  {
+    id: 'ui-testing',
+    group: 'frontend',
+    adr: '0980',
+    slug: 'user-interface-testing',
+    title: 'User interface testing',
+    question: 'How is the interface tested?',
+    when: hasUi,
+    help: 'Decides what a green build proves about the screens a user actually sees.',
+    context:
+      'ADR 0510 distributes tests for the system as a whole; the interface needs its own answer because its failure modes are different. A screen breaks by rendering the wrong state, losing focus, or not being operable — not by returning the wrong value. The trade is between tests that run in milliseconds against a simulated document and tests that run in a real browser and are the only ones that prove the assembled application works.',
+    options: [
+      {
+        value: 'component-and-flow',
+        label: 'Component tests plus critical flows',
+        hint: 'behaviour at the component level, a handful of browser tests end to end',
+        recommended: true,
+        statement:
+          'Test component behaviour against a simulated document, and cover the few flows that carry the product end to end in a real browser.',
+        consequences: [
+          'Fast feedback on the behaviour of individual screens, with proof that the assembled application still works where it matters most.',
+          'Which flows count as critical is an explicit, short list that has to be maintained as the product changes.',
+          'Failures between components that are not on a critical flow are still found by a person first.',
+        ],
+        tradeoff: 'The best ratio of confidence to runtime; a small set of slow tests to keep honest.',
+        emits: {
+          guidelines: [
+            { slug: 'ui-testing-strategy', vars: { mix: 'Component behaviour is tested against a simulated document; the flows that carry the product are covered end to end in a real browser.' } },
+          ],
+        },
+      },
+      {
+        value: 'end-to-end-heavy',
+        label: 'Mostly end to end',
+        hint: 'browser tests through the real application',
+        statement:
+          'Cover the interface primarily with browser tests exercising the real application against a running backend or a stubbed transport.',
+        consequences: [
+          'What is verified is what a user does, including the wiring between components that unit-level tests never see.',
+          'The suite is slow and sensitive to timing, so flakiness becomes a standing maintenance cost and a reason people stop trusting red.',
+          'A failure points at a screen rather than at a cause, so diagnosis is longer.',
+        ],
+        tradeoff: 'The most faithful verification available, with the slowest and most fragile suite.',
+        emits: {
+          guidelines: [
+            { slug: 'ui-testing-strategy', vars: { mix: 'The interface is covered primarily by browser tests through the real application. Every test is stable by construction: no fixed waits, and network stubbed at the transport boundary.' } },
+          ],
+        },
+      },
+      {
+        value: 'component-only',
+        label: 'Component tests only',
+        hint: 'no browser suite',
+        statement:
+          'Test components against a simulated document and rely on manual checks for the assembled application.',
+        consequences: [
+          'The whole suite runs in seconds, so it stays in the inner development loop.',
+          'Nothing verifies routing, the real network, or the build output — the failures that only appear once the parts are assembled.',
+        ],
+        tradeoff: 'The fastest suite; no evidence the application works assembled.',
+        emits: {
+          guidelines: [
+            { slug: 'ui-testing-strategy', vars: { mix: 'Components are tested against a simulated document. There is no browser suite, so anything that only fails once assembled is found by a person.' } },
+          ],
+        },
+      },
+      {
+        value: 'component-flow-and-visual',
+        label: 'Component, flow and visual regression',
+        hint: 'the above plus rendered-image comparison',
+        statement:
+          'Test component behaviour and critical flows as above, and additionally compare rendered images of key components and screens against approved references.',
+        consequences: [
+          'Catches the regressions no assertion describes: a shifted layout, a lost style, a broken state.',
+          'It is the only practical protection for a design system, where an unnoticed visual change propagates everywhere at once.',
+          'References have to be reviewed and approved on every intentional change, and rendering differences between environments produce failures that are not defects.',
+        ],
+        tradeoff: 'The only way to catch visual regressions; a review step and an infrastructure sensitivity to carry.',
+        emits: {
+          guidelines: [
+            { slug: 'ui-testing-strategy', vars: { mix: 'Component behaviour and critical flows are tested as above, and key components and screens are additionally compared against approved rendered references. A reference is updated only as part of an intentional change.' } },
+          ],
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'frontend-performance',
+    group: 'frontend',
+    adr: '0990',
+    slug: 'frontend-performance-budget',
+    title: 'Frontend performance budget',
+    question: 'Is there a frontend performance budget?',
+    when: hasUi,
+    help: 'Turns "the app feels slow now" into a number that fails a build the day it is exceeded.',
+    context:
+      'Interface weight only ever grows, and it grows in increments too small to argue about: a date library here, an analytics tag there, one more provider around the tree. Nobody makes the interface slow; a hundred reasonable additions do. A budget is the only mechanism that turns that accumulation into a conversation at the moment the weight is added, when reversing it is still one revert rather than a project.',
+    options: [
+      {
+        value: 'field-and-bundle',
+        label: 'Field metrics and a bundle gate',
+        hint: 'Core Web Vitals measured on real sessions, bundle size checked in CI',
+        recommended: true,
+        statement:
+          'Set a target for the Core Web Vitals at a percentile of real traffic, and fail the build when a change pushes the delivered bundle past its budget.',
+        consequences: [
+          'The build gate catches the cause at the pull request, while the field metrics say whether it matters to real users on real devices.',
+          'A budget increase becomes a recorded decision instead of an edited threshold.',
+          'It needs real-user measurement collected and watched, which is another pipeline and another dashboard with an owner.',
+        ],
+        tradeoff: 'Catches regressions at the change and validates them against real users; two mechanisms to maintain.',
+        emits: {
+          rules: [{ slug: 'frontend-performance-budget', vars: { budget: 'the Core Web Vitals targets at the agreed percentile, and the delivered bundle size limit' } }],
+          guidelines: ['frontend-performance-practices'],
+          runbooks: ['frontend-performance-regression'],
+          glossary: ['core-web-vitals'],
+        },
+      },
+      {
+        value: 'bundle-only',
+        label: 'Bundle size gate only',
+        hint: 'a CI check on what is shipped',
+        statement:
+          'Fail the build when a change pushes the delivered bundle past its budget, without measuring the experience in the field.',
+        consequences: [
+          'The cheapest possible gate: one check, deterministic, and it names the change that caused the growth.',
+          'Bundle size is a proxy — an interface can pass it and still be slow because of what it does after loading.',
+        ],
+        tradeoff: 'Almost free and blocks the most common regression; measures the payload rather than the experience.',
+        emits: {
+          rules: [{ slug: 'frontend-performance-budget', vars: { budget: 'the delivered bundle size limit' } }],
+          guidelines: ['frontend-performance-practices'],
+          runbooks: ['frontend-performance-regression'],
+        },
+      },
+      {
+        value: 'none',
+        label: 'No budget',
+        statement: 'Do not set a performance budget; address performance when it is reported as a problem.',
+        consequences: [
+          'No threshold to agree on and no build to unblock when a legitimate change exceeds it.',
+          'By the time slowness is reported, the cause is spread across dozens of individually reasonable changes and no single revert fixes it.',
+        ],
+        tradeoff: 'Nothing to maintain; no way to attribute the regression when it arrives.',
+        emits: {
+          guidelines: ['frontend-performance-practices'],
+          glossary: ['core-web-vitals'],
         },
       },
     ],
