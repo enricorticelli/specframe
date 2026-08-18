@@ -4,7 +4,7 @@ import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readManifest } from '../src/manifest.js';
+import { readManifest, sha256, writeManifest } from '../src/manifest.js';
 import { decideTemplateSet, writeTemplateSet } from '../src/writer.js';
 
 // `specframe decide` is the bridge between the two modes: a repository can start
@@ -219,6 +219,80 @@ test('dry run writes nothing', async () => {
     assert.equal(await exists(abs(dir, 'docs/adr/0320-event-sourcing.md')), false);
     const manifest = await readManifest(dir);
     assert.equal(manifest.config.mode, 'blank', 'the manifest is untouched');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an index the user wrote around is refreshed in place, not duplicated', async () => {
+  const dir = await blankRepo();
+  try {
+    const index = abs(dir, 'docs/rules/README.md');
+    const original = await readFile(index, 'utf8');
+    await writeFile(index, original.replace('## Index', '## House rules\n\nReviewed quarterly.\n\n## Index'), 'utf8');
+
+    await decideTemplateSet({
+      targetDir: dir,
+      ...BASE,
+      mode: 'guided',
+      decisions: { 'event-sourcing': 'yes' },
+      version: '0.5.0',
+    });
+
+    const after = await readFile(index, 'utf8');
+    assert.match(after, /Reviewed quarterly/, 'their section survives');
+    assert.match(after, /\[R-0130\]/, 'the index is up to date');
+    assert.equal(await exists(`${index}.specframe-new`), false, 'no second README');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a stale manifest baseline does not duplicate the indexes', async () => {
+  // What a poisoned manifest looked like: a hash for content that was never
+  // written, which made every later `decide` report a conflict on an index
+  // nobody had touched and leave a `.specframe-new` beside it.
+  const dir = await blankRepo();
+  try {
+    const manifest = await readManifest(dir);
+    for (const relpath of ['docs/DECISIONS.md', 'docs/rules/README.md', 'docs/adr/README.md']) {
+      manifest.files[relpath].sha256 = sha256('a version specframe never wrote');
+    }
+    await writeManifest(dir, manifest);
+
+    await decideTemplateSet({
+      targetDir: dir,
+      ...BASE,
+      mode: 'guided',
+      decisions: { 'event-sourcing': 'yes' },
+      version: '0.5.0',
+    });
+
+    for (const relpath of ['docs/DECISIONS.md', 'docs/rules/README.md', 'docs/adr/README.md']) {
+      assert.equal(await exists(`${abs(dir, relpath)}.specframe-new`), false, `${relpath} was not duplicated`);
+    }
+    assert.match(await readFile(abs(dir, 'docs/rules/README.md'), 'utf8'), /\[R-0130\]/);
+    assert.match(await readFile(abs(dir, 'docs/DECISIONS.md'), 'utf8'), /\[ADR-0320\]/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an index the user wrote in stays theirs across later runs', async () => {
+  const dir = await blankRepo();
+  try {
+    const index = abs(dir, 'docs/rules/README.md');
+    const original = await readFile(index, 'utf8');
+    await writeFile(index, original.replace('## Index', '## House rules\n\nReviewed quarterly.\n\n## Index'), 'utf8');
+
+    const config = { targetDir: dir, ...BASE, mode: 'guided', version: '0.5.0' };
+    await decideTemplateSet({ ...config, decisions: { tdd: 'strict' } });
+    await decideTemplateSet({ ...config, decisions: { tdd: 'strict', 'event-sourcing': 'yes' } });
+
+    const after = await readFile(index, 'utf8');
+    assert.match(after, /Reviewed quarterly/, 'still theirs two runs later');
+    assert.match(after, /\[R-0130\]/, 'and still current');
+    assert.equal(await exists(`${index}.specframe-new`), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

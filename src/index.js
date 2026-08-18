@@ -182,7 +182,8 @@ Revise options:
 The ADR keeps its number and gains a History section naming what the decision
 used to be. Documents the new answer no longer implies are reported, never
 deleted. A document you edited by hand is kept, with the new version beside it
-as <file>.specframe-new.
+as <file>.specframe-new; an index is refreshed in place instead, section by
+section.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -205,7 +206,10 @@ ${BLUEPRINTS.map(describeBlueprint).join('\n')}
 
 On update, files you own (docs, ADRs, CLAUDE.md, …) are never overwritten.
 A managed file you edited by hand is kept; the new version lands beside it as
-<file>.specframe-new for you to merge.`;
+<file>.specframe-new for you to merge. The one part of a document specframe
+keeps writing is the generated section of an index (the \`## Index\` table, and
+the two decision lists in DECISIONS.md): those are refreshed in place, so the
+prose you add around them survives every decide, revise and update.`;
 
 function reportInvalidAnswers(invalid) {
   if (invalid.length === 0) return;

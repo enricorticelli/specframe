@@ -226,7 +226,7 @@ Nothing already on disk moves. A document's number comes from the catalog, not f
 
 `decide` shows the same review table, with the decisions already recorded dimmed: they're there for context, but a recorded decision is superseded by editing its ADR, not by re-answering it.
 
-Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — but only if you haven't edited them; if you have, the new version lands beside them as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
+Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — and a README you've written in is refreshed too, section by section: only the `## Index` table (and, in `DECISIONS.md`, the two decision lists) is replaced, so your own headings and prose around it survive. Restructure one past recognition and specframe stops guessing: the refreshed version lands beside it as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
 
 ---
 
@@ -254,7 +254,7 @@ specframe revise --set tdd=strict -n                 # preview first
 
 - **The ADR keeps its number.** `0100` is *the* architecture-style ADR forever — that's the numbering promise the whole catalog rests on. It gains a `Revised:` header and a **History** section naming what the decision used to be, with the tradeoff that made you leave it, plus a prompt to write down *why* — the one part no tool can fill in.
 - **Confirmation is a before/after table.** Decision, from, to, ADR. Nothing is written until you've seen it.
-- **Your prose is never clobbered.** A document you edited by hand is kept and the new version lands beside it as `<file>.specframe-new`, exactly like `update`. `--force` if you want it overwritten.
+- **Your prose is never clobbered.** A document you edited by hand is kept and the new version lands beside it as `<file>.specframe-new`, exactly like `update` — except an index, where only the generated section is replaced, in place. `--force` if you want the whole file overwritten.
 - **Stale documents are reported, never deleted.** Switch off a modular monolith and `R-0110 Modules communicate only through their public surface` is no longer implied by anything — but you may have extended it, so it stays on disk and gets named in the output.
 - **It tells you what it opened.** Choosing microservices makes five questions relevant that a monolith had retired; the run says so and points at `specframe decide`.
 

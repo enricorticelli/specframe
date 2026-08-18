@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { sha256 } from '../src/manifest.js';
-import { planUpdateActions } from '../src/update.js';
+import { mergeGeneratedSections, planUpdateActions } from '../src/update.js';
 
 // Helpers -------------------------------------------------------------------
 
@@ -121,4 +121,134 @@ test('does not report user-owned manifest entries as orphans', () => {
   const actions = planUpdateActions({ plan, manifest, diskHashes });
 
   assert.equal(actionFor(actions, 'docs/old-note.md'), undefined);
+});
+
+// Generated sections ---------------------------------------------------------
+
+// The `## Index` of a README and the two halves of the decision backlog are
+// specframe's to render; the prose around them is the user's to write. Keeping
+// the two apart is what stops a refresh landing as a duplicate README.
+
+const INDEX = ['## Index'];
+
+const readme = (index, note = '') =>
+  `# Rules\n\n${note}## Conventions\n\nOne per file.\n\n## Index\n\n${index}\n`;
+
+test('a refreshed index lands inside the document, around the user text', () => {
+  const disk = readme('| R-0010 |', 'Reviewed quarterly by the platform team.\n\n');
+  const planned = readme('| R-0010 |\n| R-0020 |');
+
+  const merged = mergeGeneratedSections(disk, planned, INDEX);
+
+  assert.match(merged, /Reviewed quarterly/, 'their note survives');
+  assert.match(merged, /R-0020/, 'the index is current');
+  assert.equal(merged.match(/# Rules/g).length, 1, 'one document, not two');
+});
+
+test('a section is bounded by the next heading, not the end of the file', () => {
+  const disk = '## Decisions taken\n\n_None yet._\n\n## Open decisions\n\nmine\n\n---\n\nfooter\n';
+  const planned = '## Decisions taken\n\n| ADR-0100 |\n\n## Open decisions\n\ntheirs\n\n---\n\nfooter\n';
+
+  const merged = mergeGeneratedSections(disk, planned, ['## Decisions taken']);
+
+  assert.match(merged, /ADR-0100/);
+  assert.match(merged, /## Open decisions\n\nmine/, 'the neighbouring section is untouched');
+  assert.match(merged, /footer/);
+});
+
+test('a missing heading is not guessed at', () => {
+  // Restructured beyond recognition: the caller falls back to a sibling file.
+  assert.equal(mergeGeneratedSections('# My own index\n', readme('| R-0010 |'), INDEX), null);
+  assert.equal(mergeGeneratedSections(readme('| R-0010 |'), '# no index here\n', INDEX), null);
+  assert.equal(mergeGeneratedSections(readme('x'), readme('y'), []), null);
+});
+
+test('an index the user edited around is refreshed, not duplicated', () => {
+  const disk = readme('| R-0010 |', 'A note of mine.\n\n');
+  const plan = [{ relpath: 'docs/rules/README.md', content: readme('| R-0010 |\n| R-0020 |'), managed: true, sections: INDEX }];
+  const manifest = manifestOf({ 'docs/rules/README.md': { content: readme('| R-0010 |'), managed: false } });
+
+  const actions = planUpdateActions({ plan, manifest, diskContents: { 'docs/rules/README.md': disk } });
+
+  const a = actionFor(actions, 'docs/rules/README.md');
+  assert.equal(a.action, 'merge');
+  assert.match(a.content, /A note of mine/);
+  assert.match(a.content, /R-0020/);
+});
+
+test('an index whose generated section is already current is left alone', () => {
+  // The prose differs from this version's template — that is the user's call,
+  // and nothing specframe renders has changed.
+  const disk = readme('| R-0010 |', 'My own preamble.\n\n');
+  const plan = [{ relpath: 'docs/rules/README.md', content: readme('| R-0010 |'), managed: true, sections: INDEX }];
+
+  const actions = planUpdateActions({ plan, manifest: null, diskContents: { 'docs/rules/README.md': disk } });
+
+  assert.equal(actionFor(actions, 'docs/rules/README.md').action, 'up-to-date');
+});
+
+test('an index with no recognisable section still falls back to a sibling', () => {
+  const plan = [{ relpath: 'docs/rules/README.md', content: readme('| R-0010 |'), managed: true, sections: INDEX }];
+
+  const actions = planUpdateActions({
+    plan,
+    manifest: null,
+    diskContents: { 'docs/rules/README.md': '# My own rules index\n' },
+  });
+
+  assert.equal(actionFor(actions, 'docs/rules/README.md').action, 'conflict');
+});
+
+test('a stale manifest baseline no longer forces a conflict on a mergeable file', () => {
+  // The regression: a run that skipped this file recorded the hash of the
+  // content it did not write, so disk matched neither baseline nor plan.
+  const disk = readme('| R-0010 |');
+  const plan = [{ relpath: 'docs/rules/README.md', content: readme('| R-0020 |'), managed: true, sections: INDEX }];
+  const manifest = manifestOf({ 'docs/rules/README.md': { content: 'a hash nobody ever wrote', managed: false } });
+
+  const actions = planUpdateActions({ plan, manifest, diskContents: { 'docs/rules/README.md': disk } });
+
+  assert.equal(actionFor(actions, 'docs/rules/README.md').action, 'merge');
+});
+
+test('a file specframe only partly wrote is refreshed, never rewritten', () => {
+  // The hash matches because the last run put the index there — not because the
+  // document is specframe's. Overwriting it would delete the user's section.
+  const relpath = 'docs/rules/README.md';
+  const disk = readme('| R-0010 |', 'A note of mine.\n\n');
+  const plan = [{ relpath, content: readme('| R-0020 |'), managed: true, sections: INDEX }];
+  const manifest = { files: { [relpath]: { sha256: sha256(disk), managed: false, merged: true } } };
+
+  const actions = planUpdateActions({ plan, manifest, diskContents: { [relpath]: disk } });
+
+  const a = actionFor(actions, relpath);
+  assert.equal(a.action, 'merge');
+  assert.match(a.content, /A note of mine/, 'their section is still there');
+  assert.match(a.content, /R-0020/);
+});
+
+test('an untouched index specframe wrote whole is still refreshed whole', () => {
+  // No `merged` marker: the file is specframe's from top to bottom, so a
+  // changed template reaches the prose too.
+  const relpath = 'docs/rules/README.md';
+  const disk = readme('| R-0010 |');
+  const plan = [{ relpath, content: `${readme('| R-0020 |')}new prose\n`, managed: true, sections: INDEX }];
+  const manifest = { files: { [relpath]: { sha256: sha256(disk), managed: false } } };
+
+  const actions = planUpdateActions({ plan, manifest, diskContents: { [relpath]: disk } });
+
+  const a = actionFor(actions, relpath);
+  assert.equal(a.action, 'overwrite');
+  assert.match(a.content, /new prose/);
+});
+
+test('--force rewrites a partly-written file whole', () => {
+  const relpath = 'docs/rules/README.md';
+  const disk = readme('| R-0010 |', 'A note of mine.\n\n');
+  const plan = [{ relpath, content: readme('| R-0020 |'), managed: true, sections: INDEX }];
+  const manifest = { files: { [relpath]: { sha256: sha256(disk), managed: false, merged: true } } };
+
+  const actions = planUpdateActions({ plan, manifest, diskContents: { [relpath]: disk }, force: true });
+
+  assert.equal(actionFor(actions, relpath).action, 'overwrite');
 });

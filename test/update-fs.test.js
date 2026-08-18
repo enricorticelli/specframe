@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { writeTemplateSet, updateTemplateSet } from '../src/writer.js';
-import { readManifest } from '../src/manifest.js';
+import { readManifest, sha256 } from '../src/manifest.js';
 
 const CONFIG = {
   projectName: 'acme',
@@ -117,6 +117,41 @@ test('update --dry-run changes nothing on disk', async () => {
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0', dryRun: true });
     assert.equal(await exists(abs(dir, EXPLORER)), false, 'no writes in dry-run');
     assert.equal((await readManifest(dir)).version, '0.1.0', 'manifest untouched');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('update records the hash it wrote, not the one it skipped', async () => {
+  // The manifest is how the next run tells "you edited this" from "the template
+  // moved". Recording content that was never written poisons that comparison,
+  // and `decide` then reports a conflict on a file nobody has touched.
+  const dir = await makeRepo();
+  try {
+    const asWritten = await readFile(abs(dir, 'AGENTS.md'), 'utf8');
+    await writeFile(abs(dir, 'AGENTS.md'), 'my own AGENTS.md', 'utf8');
+
+    // A different project name makes this version's plan differ from the file
+    // on disk, the way a template change between releases would.
+    await updateTemplateSet({ targetDir: dir, ...CONFIG, projectName: 'renamed', version: '0.2.0' });
+
+    const entry = (await readManifest(dir)).files['AGENTS.md'];
+    assert.equal(entry.sha256, sha256(asWritten), 'still the version specframe wrote');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a file kept once is still protected on the run after', async () => {
+  const dir = await makeRepo();
+  try {
+    await writeFile(abs(dir, EXPLORER), 'hand-edited agent', 'utf8');
+    await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0' });
+    await rm(`${abs(dir, EXPLORER)}.specframe-new`);
+    await updateTemplateSet({ targetDir: dir, ...CONFIG, projectName: 'renamed', version: '0.3.0' });
+
+    assert.equal(await readFile(abs(dir, EXPLORER), 'utf8'), 'hand-edited agent', 'never adopted');
+    assert.ok(await exists(`${abs(dir, EXPLORER)}.specframe-new`), 'still offered beside it');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
