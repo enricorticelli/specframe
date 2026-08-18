@@ -35,3 +35,6 @@ Produce implementation plans. Do not implement.
 - If the plan requires an open decision from docs/DECISIONS.md, make that the
   first step of the plan — state the options and the trade-off, and do not pick
   one silently on the user's behalf.
+- Return the plan as your answer. Do not write it to a file, and do not create a
+  directory for it: what is worth keeping from a plan is the ADR, rule or
+  guideline it implies, each of which already has a home under docs/.

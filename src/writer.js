@@ -2,7 +2,7 @@ import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { manifestFromPlan, readManifest, sha256, writeManifest, MANIFEST_RELPATH } from './manifest.js';
+import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
 import { pad, theme } from './style.js';
@@ -40,6 +40,7 @@ export function today() {
 const ACTION_TONE = {
   write: 'good',
   update: 'good',
+  refresh: 'good',
   ok: 'muted',
   skip: 'muted',
   keep: 'warn',
@@ -71,27 +72,35 @@ const TEMPLATE_TARGETS = [
 // blank mode, a table of generated documents in guided mode. `blankOnly` files
 // are worked examples: they teach the expected level of detail, and would be
 // noise next to real generated content.
+//
+// `regenerable` files are refreshed as the decision set grows, and `generated`
+// names the headings of the part specframe renders in each: everything else in
+// them is prose the user is invited to rewrite, and a refresh has to be able to
+// land without touching it.
+const INDEX_SECTION = ['## Index'];
+const BACKLOG_SECTIONS = ['## Decisions taken', '## Open decisions'];
+
 const CONTENT_TARGETS = [
   { template: 'docs-readme.md.tpl', target: 'docs/README.md' },
-  { template: 'decisions.md.tpl', target: 'docs/DECISIONS.md', regenerable: true },
+  { template: 'decisions.md.tpl', target: 'docs/DECISIONS.md', regenerable: true, generated: BACKLOG_SECTIONS },
 
-  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md', section: 'adr', regenerable: true },
+  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md', section: 'adr', regenerable: true, generated: INDEX_SECTION },
   { template: 'adr-0000-template.md.tpl', target: 'docs/adr/0000-template.md' },
   { template: 'adr-0001-decision-policy.md.tpl', target: 'docs/adr/0001-repository-decision-policy.md' },
 
-  { template: 'rules-readme.md.tpl', target: 'docs/rules/README.md', section: 'rules', regenerable: true },
+  { template: 'rules-readme.md.tpl', target: 'docs/rules/README.md', section: 'rules', regenerable: true, generated: INDEX_SECTION },
   { template: 'rules-0000-template.md.tpl', target: 'docs/rules/0000-template.md' },
   { template: 'rules-0001-example.md.tpl', target: 'docs/rules/0001-example.md', blankOnly: true },
 
-  { template: 'guidelines-readme.md.tpl', target: 'docs/guidelines/README.md', section: 'guidelines', regenerable: true },
+  { template: 'guidelines-readme.md.tpl', target: 'docs/guidelines/README.md', section: 'guidelines', regenerable: true, generated: INDEX_SECTION },
   { template: 'guidelines-0000-template.md.tpl', target: 'docs/guidelines/0000-template.md' },
   { template: 'guidelines-0001-example.md.tpl', target: 'docs/guidelines/0001-example.md', blankOnly: true },
 
-  { template: 'runbook-readme.md.tpl', target: 'docs/runbook/README.md', section: 'runbooks', regenerable: true },
+  { template: 'runbook-readme.md.tpl', target: 'docs/runbook/README.md', section: 'runbooks', regenerable: true, generated: INDEX_SECTION },
   { template: 'runbook-0000-template.md.tpl', target: 'docs/runbook/0000-template.md' },
   { template: 'runbook-0001-example.md.tpl', target: 'docs/runbook/0001-example.md', blankOnly: true },
 
-  { template: 'glossary-readme.md.tpl', target: 'docs/glossary/README.md', section: 'glossary', regenerable: true },
+  { template: 'glossary-readme.md.tpl', target: 'docs/glossary/README.md', section: 'glossary', regenerable: true, generated: INDEX_SECTION },
   { template: 'glossary-0000-template.md.tpl', target: 'docs/glossary/0000-template.md' },
   { template: 'glossary-0001-example.md.tpl', target: 'docs/glossary/0001-example.md', blankOnly: true },
 ];
@@ -395,6 +404,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
       content: renderTemplate(templateText, fileVars),
       managed: false,
       ...(item.regenerable ? { regenerable: true } : {}),
+      ...(item.generated ? { sections: item.generated } : {}),
     });
   }
 
@@ -417,27 +427,38 @@ export async function writeTemplateSet(rawConfig) {
   const { targetDir, version } = rawConfig;
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
+  const previous = await readManifest(targetDir);
 
+  // A file already on disk is left alone, so it is reported as `skip-user`: the
+  // manifest must not claim specframe wrote whatever is in it.
+  const actions = [];
   for (const entry of plan) {
-    await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir);
+    const written = await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir);
+    actions.push({
+      relpath: entry.relpath,
+      managed: entry.managed,
+      action: written ? 'create' : 'skip-user',
+      ...(written ? { content: entry.content } : {}),
+    });
   }
 
-  await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+  await writeManifest(targetDir, manifestFromActions({ plan, actions, previous, version, config }));
   return plan;
 }
 
-// Hash whatever each planned file currently holds on disk; a missing file is
-// simply absent from the returned map.
-async function hashDiskFiles(targetDir, plan) {
-  const diskHashes = {};
+// Read whatever each planned file currently holds on disk; a missing file is
+// simply absent from the returned map. Contents rather than hashes, because
+// refreshing a generated section in place needs the surrounding text.
+async function readDiskFiles(targetDir, plan) {
+  const diskContents = {};
   for (const { relpath } of plan) {
     try {
-      diskHashes[relpath] = sha256(await readFile(toAbsPath(targetDir, relpath), 'utf8'));
+      diskContents[relpath] = await readFile(toAbsPath(targetDir, relpath), 'utf8');
     } catch {
       // not on disk — leave it out so it is treated as "create".
     }
   }
-  return diskHashes;
+  return diskContents;
 }
 
 // Reconcile an already-scaffolded repo with this version of specframe. Managed
@@ -449,14 +470,17 @@ export async function updateTemplateSet(rawConfig) {
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskHashes = await hashDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan);
 
-  const actions = planUpdateActions({ plan, manifest, diskHashes, force });
+  const actions = planUpdateActions({ plan, manifest, diskContents, force });
 
   await applyActions({ targetDir, actions, dryRun });
 
   if (!dryRun) {
-    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+    await writeManifest(
+      targetDir,
+      manifestFromActions({ plan, actions, previous: manifest, version, config }),
+    );
   }
 
   return actions;
@@ -502,7 +526,8 @@ export function planRevisionEffects({ before, after }) {
  * so it is deliberately narrow: only the documents a decision produces are in
  * scope (`derived`), plus the indexes that describe the set. Each is treated as
  * managed *for this operation only* — refreshed when untouched since specframe
- * wrote it, and landing as `.specframe-new` beside a version you edited by hand.
+ * wrote it, and landing as `.specframe-new` beside a version you edited by hand
+ * (an index instead has only its generated sections replaced, in place).
  * That is what makes a revision safe to run on a decision log someone has been
  * writing in for a year.
  */
@@ -511,21 +536,24 @@ export async function reviseTemplateSet(rawConfig) {
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskHashes = await hashDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan);
 
   const actions = planUpdateActions({
     plan: plan.map((entry) =>
       entry.regenerable || entry.derived ? { ...entry, managed: true } : entry,
     ),
     manifest,
-    diskHashes,
+    diskContents,
     force,
   });
 
   await applyActions({ targetDir, actions, dryRun });
 
   if (!dryRun) {
-    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+    await writeManifest(
+      targetDir,
+      manifestFromActions({ plan, actions, previous: manifest, version, config }),
+    );
   }
 
   return actions;
@@ -537,15 +565,16 @@ export async function reviseTemplateSet(rawConfig) {
  * New documents are created and nothing existing is overwritten — the decision
  * log is the user's. The indexes and DECISIONS.md are the exception: they exist
  * to describe the set, so leaving them stale would be worse than refreshing
- * them. They are refreshed only when untouched since specframe wrote them,
- * exactly like a managed file, and land as `.specframe-new` otherwise.
+ * them. Untouched since specframe wrote them, they are rewritten wholesale like
+ * a managed file; edited by hand, only their generated sections are replaced, so
+ * the prose someone added around an index survives every later `decide`.
  */
 export async function decideTemplateSet(rawConfig) {
   const { targetDir, version, force = false, dryRun = false } = rawConfig;
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskHashes = await hashDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan);
 
   // Treat the indexes as managed for this operation only; their recorded
   // ownership in the manifest stays user-owned. Every other planned file keeps
@@ -553,14 +582,17 @@ export async function decideTemplateSet(rawConfig) {
   const actions = planUpdateActions({
     plan: plan.map((entry) => (entry.regenerable ? { ...entry, managed: true } : entry)),
     manifest,
-    diskHashes,
+    diskContents,
     force,
   });
 
   await applyActions({ targetDir, actions, dryRun });
 
   if (!dryRun) {
-    await writeManifest(targetDir, manifestFromPlan(plan, { version, config }));
+    await writeManifest(
+      targetDir,
+      manifestFromActions({ plan, actions, previous: manifest, version, config }),
+    );
   }
 
   return actions;
@@ -570,7 +602,7 @@ async function applyActions({ targetDir, actions, dryRun }) {
   for (const action of actions) {
     const rel = action.relpath;
     if (!dryRun) {
-      if (action.action === 'create' || action.action === 'overwrite') {
+      if (action.action === 'create' || action.action === 'overwrite' || action.action === 'merge') {
         const absPath = toAbsPath(targetDir, rel);
         await mkdir(path.dirname(absPath), { recursive: true });
         await writeFile(absPath, action.content, 'utf8');
@@ -585,6 +617,7 @@ async function applyActions({ targetDir, actions, dryRun }) {
 const ACTION_LABEL = {
   create: 'write',
   overwrite: 'update',
+  merge: 'refresh',
   'up-to-date': 'ok',
   conflict: 'conflict',
   'skip-user': 'keep',
@@ -595,6 +628,7 @@ function reportAction(action, dryRun) {
   if (action.action === 'up-to-date') return; // nothing changed; stay quiet
   const label = ACTION_LABEL[action.action] ?? action.action;
   let suffix = '';
+  if (action.action === 'merge') suffix = ' (generated sections only — your text kept)';
   if (action.action === 'conflict') suffix = ` ${theme.glyph.arrow} wrote ${action.relpath}.specframe-new (yours kept)`;
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
   if (action.action === 'orphan') suffix = ' (no longer generated — remove if unused)';
