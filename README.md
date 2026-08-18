@@ -208,6 +208,11 @@ Pick agent assistants and specframe drops subagents, slash commands and skills i
 
 - **Subagents:** `explorer`, `planner`, `reviewer`
 - **Commands:** `/specframe-specify`, `/specframe-plan`, `/specframe-review`, `/specframe-bootstrap`
+  — `specify` and `plan` answer **in the conversation**, on purpose. specframe writes
+  no `prd/`, no `specs/`, no per-feature `spec.md`/`plan.md` pair: those are correct
+  until the change lands and stale after it. What outlives the change is the ADR,
+  rule or guideline the spec implied — which is why the commands hand you back to
+  `docs/`, and why there is nothing per-feature to maintain.
 - **Skills** (auto-triggered): `specframe-adr-draft` turns a conversation into a recorded decision · `specframe-rule-check` enforces your rules on every diff · `specframe-doc-sync` flags when a new convention or term appears in code without a matching doc.
 
 **Agents that don't read `AGENTS.md`** get a thin native pointer instead: `GEMINI.md` (yours to extend), `.continue/rules/specframe.md` and `.amazonq/rules/specframe.md` (managed). One canonical source, one thing to maintain.
