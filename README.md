@@ -108,9 +108,11 @@ Each answer becomes an **ADR** — including the alternatives you rejected and w
 
 **Not answering is the deliberate act:** `s` leaves a question open (or a whole section, at its header) · `a` leaves everything remaining open · `d` takes every recommendation from here at once · `b` back · `?` explain · `q` quit.
 
+**Arrow keys where the terminal has them.** On a real terminal the options are a live list: `↑`/`↓` move, `enter` takes what's under the cursor, `space` marks where several answers are allowed, and every shortcut above is a single key with no `enter` after it. The cursor starts on the option `enter` would take anyway — your existing answer, or the recommendation — so it never changes what `enter` means, only how fast you get there; where there's nothing to accept it starts on no option at all rather than implying one. Typed numbers keep working. Over ssh into a dumb terminal, through a pipe, or with `SPECFRAME_NO_KEYS=1`, the prompts print themselves and read a line instead — same questions, same keys, same answers.
+
 Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you leave open lands in `docs/DECISIONS.md`, and `specframe decide` picks it up later.
 
-Every answer is echoed with the ADR it will produce and whether it came from the recommendation, each section header shows how much of it is answered, and nothing is written until you've seen the review table — so accepting a default is visible three times over, not silent. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing).
+Every answer is echoed with the ADR it will produce and whether it came from the recommendation, each section header shows how much of it is answered, and nothing is written until you've seen the review table — so accepting a default is visible three times over, not silent. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing, `SPECFRAME_NO_KEYS=1` the arrow keys).
 
 ### Reviewing before you write
 
