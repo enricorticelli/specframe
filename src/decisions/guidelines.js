@@ -490,4 +490,124 @@ export const GUIDELINES = {
     good: 'As an architect, I need to split the notification component so billing can be deployed without the ticket workflow.',
     avoid: 'Refactor the notification package (tech debt).',
   },
+
+  'rendering-and-caching': {
+    number: '0470',
+    title: 'Rendering and caching',
+    scope: 'Every route and page of the interface.',
+    statement:
+      '{{strategy}} A route states which of these it uses and why; a route that needs a different mode is a decision worth a sentence in its own file, not a silent exception. Data that changes per user is never cached where a shared cache can serve it to someone else.',
+    rationale:
+      'Where markup is produced decides first paint, crawlability, and infrastructure cost at once. Mixing modes without saying so is how a page that must be private ends up on a CDN.',
+  },
+
+  'ui-component-layering': {
+    number: '0480',
+    title: 'UI component layering',
+    scope: 'All interface code.',
+    statement:
+      'A presentation component renders from its props and owns no data access. A feature component may fetch, coordinate, and hold state, and composes presentation components to display it. Nothing in the presentation layer imports an API client, a route, or a store.',
+    rationale:
+      'The split is what makes the visual layer reusable across features and testable without a network, and it is the line an agent crosses first when it drops a fetch call into a button.',
+    good: 'features/checkout/CheckoutPanel  →  ui/Button, ui/PriceTag',
+    avoid: 'ui/Button calling fetch("/api/cart")',
+  },
+
+  'design-system-usage': {
+    number: '0490',
+    title: 'Using the design system',
+    scope: 'Every screen and component.',
+    statement:
+      '{{source}} Build a new base component only after establishing that the existing one cannot be composed or extended into it. A one-off variant lives with the feature that needs it, never as a fork of the base component.',
+    rationale:
+      'Base components are the only place where a change to spacing, focus behaviour or contrast can be made once. Every fork is a copy that will not receive the next fix.',
+  },
+
+  'client-state-management': {
+    number: '0500',
+    title: 'State management',
+    scope: 'All interface code.',
+    statement:
+      '{{model}} Server state and client state are never merged into one store. State lives as close to the component that uses it as it can; state that must survive a reload or be shareable goes in the URL. Derived values are computed at render, not stored.',
+    rationale:
+      'Cached remote data and locally owned data have different lifecycles: one is invalidated, the other is set. Storing them together means every read has to know which kind it got.',
+    good: 'const { data } = useQuery(orderKey(id))\nconst [expanded, setExpanded] = useState(false)',
+    avoid: 'store.dispatch(setOrder(await fetchOrder(id)))',
+  },
+
+  'styling-conventions': {
+    number: '0510',
+    title: 'Styling conventions',
+    scope: 'All interface code.',
+    statement:
+      '{{system}} Styles are colocated with the component they belong to. Layout is expressed with flow, flex and grid rather than absolute positioning; spacing between siblings belongs to the container. Responsive behaviour uses the token breakpoints, not ad-hoc widths.',
+    rationale:
+      'Colocated styles are deleted along with their component, which is what keeps a stylesheet from outliving the markup it was written for.',
+  },
+
+  'accessibility-practices': {
+    number: '0520',
+    title: 'Accessibility practices',
+    scope: 'Every user-facing surface.',
+    statement:
+      'Use the native element before reaching for a role: a button that is a `button` is focusable, operable and announced without any help. Every control has a label, every meaningful image has alternative text, and every decorative one is hidden from assistive technology. Focus order follows reading order, and focus is moved deliberately when content is replaced. Never rely on colour alone to carry meaning.',
+    rationale:
+      'Most accessibility failures are not exotic: they are a `div` with a click handler, an icon with no name, and a focus outline someone removed because it looked untidy.',
+    good: '<button type="button" onClick={close}>Close</button>',
+    avoid: '<div class="btn" onclick="close()">✕</div>',
+  },
+
+  'i18n-workflow': {
+    number: '0530',
+    title: 'Internationalisation workflow',
+    scope: 'All user-facing text and formatted values.',
+    statement:
+      'Text is referenced by key from the default locale catalogue; the key names the meaning, not the English wording. Never build a sentence by concatenating fragments — use one message with interpolation, and use the plural forms the library provides. Dates, numbers and currencies are formatted through the locale, never with a hand-written pattern. Layout tolerates strings a third longer than the original and reading direction is not assumed.',
+    rationale:
+      'Concatenated fragments are untranslatable in any language whose word order differs, and a layout tuned to English string lengths breaks on the first locale that is added.',
+    good: 't("cart.itemsRemaining", { count })',
+    avoid: 't("cart.youHave") + count + t("cart.itemsLeft")',
+  },
+
+  'ui-testing-strategy': {
+    number: '0540',
+    title: 'Interface testing',
+    scope: 'All interface tests.',
+    statement:
+      '{{mix}} Tests query the way a user does — by role, label and text — never by class name or component internals. Network access is stubbed at the transport boundary rather than by mocking the components that call it, so the code under test is the code that ships.',
+    rationale:
+      'A test bound to markup structure fails on every refactor and passes through every behavioural regression, which is the worst of both trades.',
+    good: 'screen.getByRole("button", { name: "Place order" })',
+    avoid: 'wrapper.find(".btn-primary").at(2)',
+  },
+
+  'frontend-performance-practices': {
+    number: '0550',
+    title: 'Frontend performance',
+    scope: 'All interface code.',
+    statement:
+      'Split at the route boundary and load below-the-fold and interaction-only code on demand. Reserve space for anything that arrives late — images, embeds, injected banners — so nothing shifts under the reader. Serve images in a modern format at the size they are displayed. Adopt a dependency only after checking what it adds to the bundle, and measure at a percentile of real sessions rather than on a developer machine.',
+    rationale:
+      'Interface performance is lost in small, individually reasonable increments; each of these is a decision made at the moment the weight is added, when it is still cheap.',
+  },
+
+  'forms-and-validation': {
+    number: '0560',
+    title: 'Forms and validation',
+    scope: 'Every form in the interface.',
+    statement:
+      'Validation rules are declared once as a schema and used on both sides of the boundary; the client copy is there for feedback, and the server copy is the one that decides. Validate a field when it is left rather than on every keystroke, and show the error next to the field, in text, referenced by the input. Submission is disabled while in flight and the result is announced, not just rendered.',
+    rationale:
+      'Client validation is a courtesy that anyone can bypass. Keeping the rules in one schema is what stops the two sides from disagreeing about what a valid value is.',
+  },
+
+  'loading-and-error-states': {
+    number: '0570',
+    title: 'Loading, empty and error states',
+    scope: 'Every view that reads remote data.',
+    statement:
+      'Every view that fetches declares four states: loading, empty, error, and loaded. Reserve the loaded layout while loading so nothing jumps. An error state says what failed and offers the retry; an empty state says why it is empty and what to do next. An unexpected failure is caught by an error boundary at the route, so one broken subtree does not blank the page.',
+    rationale:
+      'The three states that are not the happy path are the ones an agent silently omits, and they are most of what a user actually experiences when something is wrong.',
+  },
 };

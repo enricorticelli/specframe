@@ -23,7 +23,7 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 **specframe flips that around.** It scaffolds a decision-first structure in seconds and keeps every agent's tooling wired to it. Your architecture decisions, rules, conventions, runbooks and glossary *are* the source of truth — and every AI agent (Claude, Copilot, Codex, Gemini, Continue, Amazon Q) is pointed straight at them.
 
 - 🎯 **Decision-driven.** ADRs capture *what & why*, rules capture *what's non-negotiable*, guidelines capture *how you build*, runbooks capture *what to do when it breaks*, the glossary keeps *what words mean here*. Agents read intent instead of reverse-engineering it.
-- 🧭 **Three ways in.** A **blank** log with every template and how to fill it, a **guided** pass over 42 architecture decisions where each answer becomes an ADR plus the rules it implies, or a **blueprint** — pick the architecture you already have in mind and walk that same pass with its answers already in place. Skip a section with one key; what you skip stays tracked as open.
+- 🧭 **Three ways in.** A **blank** log with every template and how to fill it, a **guided** pass over 52 architecture decisions where each answer becomes an ADR plus the rules it implies, or a **blueprint** — pick the architecture you already have in mind and walk that same pass with its answers already in place. Skip a section with one key; what you skip stays tracked as open.
 - 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical. Every agent's native config is a thin pointer back — no more syncing five instruction files by hand.
 - 🤖 **Broad agent support.** Claude, Copilot and Codex get full subagents, slash commands and skills in each tool's *current* convention. Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Jules and more read `AGENTS.md` natively — nothing extra needed.
@@ -73,7 +73,7 @@ Nothing decided for you; nothing left to guess about *how* to decide.
 
 ### Blueprint — start from a known architecture
 
-Forty-two questions from a blank map is a lot to ask of someone who already knows they're building microservices. Pick the archetype instead:
+Fifty-two questions from a blank map is a lot to ask of someone who already knows they're building microservices. Pick the archetype instead:
 
 ```
   1) Layered CRUD application    one deployable, controllers/services/repositories, relational
@@ -83,9 +83,12 @@ Forty-two questions from a blank map is a lot to ask of someone who already know
   5) Event-driven microservices  a database each, async messaging, choreographed sagas
   6) Event sourcing and CQRS     the event log is the system of record
   7) Serverless functions        managed runtime per function, previews per change
+  8) SPA and API                 client-rendered interface, modular monolith behind it
+  9) Server-rendered full-stack  one deployable, rendering mode per route
+ 10) Content site               generated at build time, no store, no session
 ```
 
-A blueprint answers the decisions that *are* the architecture — architecture, design, data — plus the ones its shape forces on you: pick microservices and contract testing, tracing, structured logs and SLOs come with it, because a distributed system without them is a decision too, just an unrecorded one. Everything else is left alone.
+A blueprint answers the decisions that *are* the architecture — architecture, design, data, and the shape of the interface where it has one — plus the ones its shape forces on you: pick microservices and contract testing, tracing, structured logs and SLOs come with it, because a distributed system without them is a decision too, just an unrecorded one. Everything else is left alone.
 
 Then you walk the guided pass exactly as below, with every blueprint answer showing as `current` and `enter` meaning *keep it*. Nothing is pre-accepted: **a blueprint is a starting position to argue with**, and every pre-answered question is still asked, one at a time, with the alternatives it beat listed under it.
 
@@ -102,7 +105,9 @@ Where they overlap, the blueprint wins; `--set` still beats both.
 
 Each answer becomes an **ADR** — including the alternatives you rejected and why — plus the **rules**, **guidelines**, **runbooks** and **glossary terms** it implies, cross-linked both ways. Answer `microservices` and you get the ADR, `R-0090 No service reads another service's database`, a service-boundary guideline, a degradation runbook, and the terms to match.
 
-42 decisions across 8 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching — all optional, none assumed.
+52 decisions across 9 sections: architecture · design & modelling · data & consistency · code quality · testing · security & compliance · observability · delivery · user interface. Event sourcing, CQRS, TDD, Clean Code, sagas, SLOs, branching, rendering strategy, client state, styling, WCAG — all optional, none assumed.
+
+The interface section is gated on one question: answer *no user interface* and the whole thing retires, so a service repository is never asked where its buttons come from. Answer anything else and rendering, composition, state, styling, accessibility, translation and the performance budget stop being decided per screen, per session, by whoever is typing.
 
 **`enter` takes the recommended option** — the one marked ★, named in the prompt so you can see what you're accepting. Hold enter down and you get the `balanced` preset one visible answer at a time. On a second pass over a question you've already answered, enter *keeps* your answer instead.
 
@@ -110,13 +115,13 @@ Each answer becomes an **ADR** — including the alternatives you rejected and w
 
 **Arrow keys where the terminal has them.** On a real terminal the options are a live list: `↑`/`↓` move, `enter` takes what's under the cursor, `space` marks where several answers are allowed, and every shortcut above is a single key with no `enter` after it. The cursor starts on the option `enter` would take anyway — your existing answer, or the recommendation — so it never changes what `enter` means, only how fast you get there; where there's nothing to accept it starts on no option at all rather than implying one. Typed numbers keep working. Over ssh into a dumb terminal, through a pipe, or with `SPECFRAME_NO_KEYS=1`, the prompts print themselves and read a line instead — same questions, same keys, same answers.
 
-Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear. Whatever you leave open lands in `docs/DECISIONS.md`, and `specframe decide` picks it up later.
+Questions that stop applying are never asked — pick a modular monolith and the cross-service data-ownership questions disappear; say the repository stores nothing and the whole data section goes with it, along with the migrations question a static site has no answer to. Whatever you leave open lands in `docs/DECISIONS.md`, and `specframe decide` picks it up later.
 
 Every answer is echoed with the ADR it will produce and whether it came from the recommendation, each section header shows how much of it is answered, and nothing is written until you've seen the review table — so accepting a default is visible three times over, not silent. Colour is used for hierarchy only, and turns itself off when nobody's watching (`NO_COLOR`, a pipe, `--no-color`; `SPECFRAME_ASCII=1` also drops the box drawing, `SPECFRAME_NO_KEYS=1` the arrow keys).
 
 ### Reviewing before you write
 
-Thirty-odd decisions is more than anyone holds in their head, so nothing is written until you've seen the table:
+Fifty-odd decisions is more than anyone holds in their head, so nothing is written until you've seen the table:
 
 ```
 ┌────┬──────────────────────────────┬────────────────────────┬─────┬──────┐
@@ -151,7 +156,7 @@ npx specframe --answers ./decisions.json # or another repo's manifest.json
 | Flag | Effect |
 | --- | --- |
 | `--preset blank\|balanced\|strict` | The posture. Seeds the wizard; with `--yes`, runs unattended. |
-| `--blueprint <id>` | The shape. `crud`, `modular-monolith`, `hexagonal`, `service-based`, `microservices`, `event-sourcing`, `serverless`. Beats `--preset` where they overlap. |
+| `--blueprint <id>` | The shape. `crud`, `modular-monolith`, `hexagonal`, `service-based`, `microservices`, `event-sourcing`, `serverless`, `spa-api`, `ssr-fullstack`, `content-site`. Beats `--preset` where they overlap. |
 | `--set k=v,...` | Answer directly. Repeatable. Beats `--preset`, `--blueprint` and `--answers`. |
 | `--answers FILE` | JSON map, or a saved `.specframe/manifest.json` to replay a setup. |
 | `--mode blank\|guided\|blueprint` | Skip the mode question. |

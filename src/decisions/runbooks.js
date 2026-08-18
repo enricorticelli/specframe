@@ -144,4 +144,45 @@ export const RUNBOOKS = {
     verification: 'The objective is back within target and the error-budget burn rate has returned to normal.',
     rollback: 'Revert the mitigation only after confirming the underlying cause is gone; otherwise keep it and track it as debt.',
   },
+
+  'broken-frontend-release': {
+    number: '0080',
+    title: 'Recover from a broken interface release',
+    when: 'A deployed build renders blank, throws on load, or leaves part of the interface unusable for real users.',
+    prerequisites: [
+      'The commit SHA of the current build and of the last one known good.',
+      'Access to the CDN or host that serves the built assets, with permission to invalidate.',
+      'Client-side error reporting for the affected release, and the browser and version the reports come from.',
+    ],
+    steps: [
+      'Establish the blast radius before acting: all users, one browser, or one route. A failure in one browser is a compatibility problem, not a release to roll back.',
+      'Redeploy the last known good build. Interface rollbacks are usually safe on their own — check first whether this release depended on an API change that is already live.',
+      'Invalidate the CDN cache for the entry point, and confirm the served document references the previous asset hashes.',
+      'If a service worker is in use, ship the update that unregisters or replaces it — a stale worker keeps serving the broken build to returning visitors long after the origin is fixed.',
+      'Verify from an ordinary session with a cold cache, not from a developer machine with one already primed.',
+      'Reproduce the failure on the reverted branch before fixing it forward, and add the check that would have caught it.',
+    ],
+    verification: 'The client error rate is back to baseline, a cold-cache load of the primary route completes, and the served document references the expected build.',
+    rollback: 'If the previous build is also broken, serve a maintenance page rather than leaving users on a blank one, and treat the API change shipped alongside it as the suspect.',
+  },
+
+  'frontend-performance-regression': {
+    number: '0090',
+    title: 'Diagnose a frontend performance regression',
+    when: 'A field metric degrades, or the budget check fails on a change that has to ship.',
+    prerequisites: [
+      'Field measurements for the affected metric, at a percentile rather than an average.',
+      'A build report for the current release and for the one before it.',
+      'A lab profile captured on a throttled connection and a mid-range device.',
+    ],
+    steps: [
+      'Confirm the regression is real: compare the same percentile, the same route, and the same population before drawing a conclusion.',
+      'Diff the build report against the previous release — a single new dependency accounts for most step changes in weight.',
+      'Separate what got heavier from what got later: a bundle that grew and a render that now waits on a request are different faults with different fixes.',
+      'Profile the route on a throttled connection and mid-range device to find what blocks first paint and first interaction.',
+      'Fix the cause rather than the number: defer, split, or drop the addition. Raising the budget is a decision that belongs in an ADR.',
+    ],
+    verification: 'The metric returns to its previous percentile in field data over a full traffic cycle, and the budget check passes without being edited.',
+    rollback: 'Revert the change that introduced the weight. If it must ship, load it on demand behind the interaction that needs it, and record the exception.',
+  },
 };

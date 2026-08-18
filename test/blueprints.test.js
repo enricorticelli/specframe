@@ -64,6 +64,10 @@ test('a blueprint takes the architecture, design and data decisions', () => {
   const shape = ['architecture-style', 'component-structure', 'layering', 'persistence', 'migrations'];
   for (const blueprint of BLUEPRINTS) {
     for (const id of shape) {
+      // A decision the blueprint's own shape retires is not left open, it is
+      // gone: `content-site` stores nothing, so it has no schema to migrate.
+      // The test above proves it does not answer one anyway.
+      if (!isRelevant(getDecision(id), blueprint.answers)) continue;
       assert.ok(blueprint.answers[id], `${blueprint.id} leaves ${id} open, but it is part of the shape`);
     }
   }

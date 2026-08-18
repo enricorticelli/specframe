@@ -317,4 +317,58 @@ export const RULES = {
     why: 'The namespace is the only place a boundary is visible while reading code. When it does not match what ships, the deployment unit becomes an unstructured container and moving code between units stops being mechanical.',
     enforcement: 'Per-unit CI check asserting its sources reside under its declared root package.',
   },
+
+  'no-secrets-in-client-bundle': {
+    number: '0350',
+    title: 'Nothing secret reaches the client bundle',
+    status: 'enforced',
+    statement: 'Never place an API key, a private token, or a privileged endpoint in code that is shipped to the browser, and never rely on the interface to hide an action the API still allows.',
+    why: 'Everything served to a browser is readable and callable by anyone who receives it. A control that only exists in the interface is a suggestion, and a key in the bundle is a published key.',
+    enforcement: 'Build-time check that only variables under the public prefix are inlined, plus a server-side authorisation test for every action the interface can trigger.',
+  },
+
+  'wcag-conformance': {
+    number: '0360',
+    title: 'Interfaces meet WCAG {{level}}',
+    status: 'enforced',
+    statement: 'Every user-facing screen conforms to WCAG {{level}}: operable by keyboard alone, an accessible name on every control, contrast within the ratio, and a visible focus indicator that is never removed.',
+    why: 'Accessibility is a legal requirement in most of the markets this software is sold into, and it is far cheaper as a constraint on new work than as a remediation project on shipped work.',
+    enforcement: 'Automated audit in CI on the primary flows — which catches roughly a third of failures — plus a keyboard-only pass in review for anything interactive.',
+  },
+
+  'no-untyped-user-facing-text': {
+    number: '0370',
+    title: 'No hardcoded user-facing text',
+    status: 'enforced',
+    statement: 'User-facing strings, dates, numbers and currencies go through the translation and formatting layer. A literal string in a component is a defect, not a placeholder.',
+    why: 'A string hardcoded once is hardcoded in every copy of the component that follows it, and retrofitting extraction across a grown interface costs more than the whole feature that introduced the first one.',
+    enforcement: 'Lint rule against string literals in rendered output, plus a check that every key referenced exists in the default locale.',
+  },
+
+  'frontend-performance-budget': {
+    number: '0380',
+    title: 'Frontend budget: {{budget}}',
+    status: 'enforced',
+    statement: 'The pipeline fails when a change pushes the interface past {{budget}}. Raising the budget is a decision recorded in an ADR, not a line edited to make a build pass.',
+    why: 'Interface weight only ever grows by amounts too small to argue about individually. A budget is what turns that accumulation into a conversation at the moment it happens.',
+    enforcement: 'Blocking CI job comparing the built output and a lab run against the budget on every pull request.',
+  },
+
+  'one-styling-system': {
+    number: '0390',
+    title: 'One styling system: {{system}}',
+    status: 'enforced',
+    statement: 'All styling is written with {{system}}. Introducing a second styling mechanism requires an ADR that supersedes this one; ad-hoc inline styles are limited to values that are genuinely computed at runtime.',
+    why: 'Two styling systems in one interface means two cascades, two theming stories, and a specificity conflict nobody can resolve locally. It is the most common way a codebase ends up with a look that cannot be changed in one place.',
+    enforcement: 'Lint rule rejecting the mechanisms that are not chosen; review rejects a new dependency that brings its own.',
+  },
+
+  'design-tokens-not-literals': {
+    number: '0400',
+    title: 'Design values come from tokens',
+    status: 'enforced',
+    statement: 'Colours, spacing, radii, typography and breakpoints are referenced through design tokens. A literal value in a component is only acceptable when it is genuinely one-off and documented as such.',
+    why: 'Tokens are what make a visual change a single edit and a contrast fix provable. Literals scattered through components make both of those a search-and-hope exercise.',
+    enforcement: 'Lint rule rejecting raw colour and spacing literals in component styles.',
+  },
 };

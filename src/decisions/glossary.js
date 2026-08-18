@@ -11,6 +11,7 @@ export const GLOSSARY_GROUPS = {
   quality: { number: '0030', title: 'Quality and testing' },
   security: { number: '0040', title: 'Security' },
   delivery: { number: '0050', title: 'Delivery and operations' },
+  frontend: { number: '0060', title: 'User interface' },
 };
 
 export const GLOSSARY_TERMS = {
@@ -311,5 +312,85 @@ export const GLOSSARY_TERMS = {
     aliases: '—',
     context: 'Applies to the backlog; it competes with features rather than waiting behind them.',
     related: 'Fitness function, Component',
+  },
+
+  'ui-component': {
+    group: 'frontend',
+    term: 'UI component',
+    definition:
+      'A unit of the interface that owns its own markup, styling, and interaction, and is reused by composition. It is a rendering unit, not an architectural component: it never appears in the deployment topology and never owns business rules.',
+    aliases: 'Widget',
+    context: 'Applies to the interface tree. Contrast with Component, which is a leaf of the source namespace.',
+    related: 'Component, Design token, Hydration',
+  },
+
+  hydration: {
+    group: 'frontend',
+    term: 'Hydration',
+    definition:
+      'Attaching client-side behaviour to markup that arrived already rendered from the server. Until it completes the page is visible but inert, which is why what is hydrated, and when, is a performance decision rather than a detail.',
+    aliases: 'Rehydration',
+    context: 'Applies to any server-rendered interface. A purely client-rendered application has no hydration step, and a purely static one needs none.',
+    related: 'UI component, Core Web Vitals, Server state',
+  },
+
+  'design-token': {
+    group: 'frontend',
+    term: 'Design token',
+    definition:
+      'A named design decision — a colour, a spacing step, a radius, a type scale — stored once and referenced everywhere instead of the literal value. Tokens are what make a visual change one edit rather than a search across the tree.',
+    aliases: 'Theme variable',
+    context: 'Applies to every styled surface, including components adopted from a third-party library.',
+    related: 'UI component, Accessible name',
+  },
+
+  'server-state': {
+    group: 'frontend',
+    term: 'Server state',
+    definition:
+      'Data the client did not create and does not own: it is fetched, it is a cached copy, and it can be stale the moment it arrives. It needs a freshness policy, not a setter.',
+    aliases: 'Remote state, cached state',
+    context: 'Applies to anything read from an API. Keeping it separate from client state is what stops a cache from being edited as if it were the truth.',
+    related: 'Client state, Eventual consistency',
+  },
+
+  'client-state': {
+    group: 'frontend',
+    term: 'Client state',
+    definition:
+      'Data the client owns outright and no server knows about: what is selected, expanded, typed but not yet submitted. It lives as close to the component that uses it as possible, or in the URL when it should survive a reload or be shareable.',
+    aliases: 'UI state, local state',
+    context: 'Applies to the interface layer only. Anything a refresh must not lose belongs in the URL or on the server.',
+    related: 'Server state, UI component',
+  },
+
+  'core-web-vitals': {
+    group: 'frontend',
+    term: 'Core Web Vitals',
+    definition:
+      'A small set of field-measured user-experience metrics — largest contentful paint, interaction to next paint, cumulative layout shift. They are measured on real sessions, so a laboratory number that disagrees with them is the number that is wrong.',
+    aliases: 'CWV',
+    context: 'Applies to browser-delivered interfaces, measured at a percentile of real traffic rather than as an average.',
+    related: 'Hydration, UI component',
+  },
+
+  locale: {
+    group: 'frontend',
+    term: 'Locale',
+    definition:
+      'The language and regional conventions a session is rendered in: translations, but also date, number, currency, sort order, and text direction. It is a property of the request, never of the build.',
+    aliases: '—',
+    context: 'Applies wherever user-facing text or formatted values are produced, on the server as well as in the browser.',
+    related: 'UI component, Design token',
+  },
+
+  'accessible-name': {
+    group: 'frontend',
+    term: 'Accessible name',
+    definition:
+      'The text an assistive technology announces for an element, computed from its content, its label, or an explicit attribute. An icon-only control with no accessible name is unusable by anyone not looking at it, and invisible to most automated checks.',
+    aliases: '—',
+    context: 'Applies to every interactive element and every image that carries meaning.',
+    related: 'UI component, Design token',
   },
 };
