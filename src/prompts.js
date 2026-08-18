@@ -1,6 +1,7 @@
 import process from 'node:process';
 
 import { applyRecommendedDefaults } from './answers.js';
+import { BLUEPRINTS, blueprintCoverage, blueprintHeadline } from './decisions/blueprints.js';
 import { GROUPS, decisionsForGroup, isRelevant, recommendedValue } from './decisions/catalog.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import {
@@ -58,11 +59,25 @@ const MODES = [
     hint: 'Every decision you take becomes an ADR plus the rules and guidelines it implies. Enter takes the recommended option; one key leaves a question, or a whole section, open.',
   },
   {
+    value: 'blueprint',
+    label: 'Blueprint — start from a known architecture',
+    hint: 'Pick an archetype and the questions arrive already answered the way that architecture answers them. Then walk the same guided pass, changing what does not fit.',
+  },
+  {
     value: 'blank',
     label: 'Blank — templates only',
     hint: 'No decisions taken. Every template, its filling instructions, and the full decision backlog in docs/DECISIONS.md.',
   },
 ];
+
+// Blueprints as prompt options. The list is the catalog's, in its own order —
+// simplest shape first — so the screen reads as a ladder from one deployable to
+// many rather than as a menu of equals.
+const BLUEPRINT_OPTIONS = BLUEPRINTS.map((blueprint) => ({
+  value: blueprint.id,
+  label: blueprint.label,
+  hint: blueprint.hint,
+}));
 
 const PROMPT = () => `${theme.accent(theme.glyph.prompt)} `;
 
@@ -181,6 +196,69 @@ async function askMode(io) {
     help: MODES.map((m) => `${m.label}\n  ${m.hint}`).join('\n\n'),
   });
   return choice.kind === CONTROL.SELECT ? MODES[choice.values[0] - 1].value : 'guided';
+}
+
+/**
+ * Pick an architecture blueprint.
+ *
+ * The screen between "no decisions" and "forty questions from scratch": you
+ * choose the shape you already have in mind, and the wizard starts from what
+ * that shape implies instead of from a blank map.
+ *
+ * `enter` goes back to the mode question rather than taking a default. There is
+ * no recommended architecture — the whole point of the catalog is that the
+ * right one depends on the system — so offering one here by way of a default
+ * would contradict every question that follows.
+ *
+ * @returns {{kind: 'select', blueprint: object} | {kind: 'back'} | {kind: 'quit'}}
+ */
+async function askBlueprint(io) {
+  const width = terminalWidth();
+  const choice = await askChoice(io, {
+    header: [
+      sectionTitle('Blueprint', { width }),
+      ...wrapText(
+        'Each one answers the architecture, design and data decisions the way that architecture answers them, plus what its shape forces on you. Nothing is written: every answer comes back as a question with your blueprint\'s answer already selected.',
+        width,
+        '  ',
+      ).map((line) => theme.muted(line)),
+      '',
+      formatOptions(BLUEPRINT_OPTIONS, { theme, width }),
+      '',
+      formatKeys(
+        [['1-' + BLUEPRINT_OPTIONS.length, 'choose'], ['enter', 'back'], ['?', 'what each one commits you to']],
+        { theme },
+      ),
+    ].join('\n'),
+    options: BLUEPRINT_OPTIONS,
+    help: BLUEPRINTS.map((b) => `${b.label}\n  ${b.description}`).join('\n\n'),
+  });
+
+  if (choice.kind === CONTROL.QUIT) return { kind: CONTROL.QUIT };
+  if (choice.kind !== CONTROL.SELECT) return { kind: 'back' };
+  return { kind: CONTROL.SELECT, blueprint: BLUEPRINTS[choice.values[0] - 1] };
+}
+
+// What picking a blueprint bought you, said out loud before the first question:
+// the shape in the catalog's own words, and how much of the catalog it leaves.
+function logBlueprintEcho(io, blueprint, { width = terminalWidth() } = {}) {
+  const { answered, relevant } = blueprintCoverage(blueprint);
+  io.log('');
+  io.log(`  ${theme.good(theme.glyph.check)} ${theme.bold(blueprint.label)}`);
+  io.log(
+    wrapText(blueprintHeadline(blueprint), width, '    ')
+      .map((line) => theme.muted(line))
+      .join('\n'),
+  );
+  io.log(
+    wrapText(
+      `${answered} of the ${relevant} decisions that still apply come pre-answered. Every one is asked again with that answer selected — enter keeps it, a number changes it.`,
+      width,
+      '    ',
+    )
+      .map((line) => theme.muted(line))
+      .join('\n'),
+  );
 }
 
 // What `enter` resolves to for one decision: the answer already given if there
@@ -629,7 +707,26 @@ export async function askQuestions({
           agentTargets: seed.agentTargets ?? [],
         };
 
-    const mode = fixedMode ?? (await askMode(io));
+    // The blueprint screen sits inside the mode question rather than after it:
+    // picking one resolves to guided, and `enter` there comes back here, so a
+    // wrong turn costs a keystroke instead of a run.
+    let mode = fixedMode ?? (await askMode(io));
+    let seeded = seed.decisions ?? {};
+
+    while (mode === 'blueprint') {
+      const picked = await askBlueprint(io);
+      if (picked.kind === CONTROL.QUIT) return null;
+      if (picked.kind !== CONTROL.SELECT) {
+        mode = await askMode(io);
+        continue;
+      }
+      // An answer given on the command line is about one decision and was typed
+      // on purpose, so it survives the blueprint that arrived after it — the
+      // same precedence `--set` has over `--preset`.
+      seeded = { ...picked.blueprint.answers, ...seeded };
+      logBlueprintEcho(io, picked.blueprint, { width });
+      mode = 'guided';
+    }
 
     if (mode === 'blank') {
       logBlankSummary(io, { width });
@@ -641,7 +738,7 @@ export async function askQuestions({
     // editable, because an ADR is superseded, not rewritten.
     const editable = only ? new Set(only) : null;
 
-    let decisions = seed.decisions ?? {};
+    let decisions = seeded;
     for (;;) {
       const answered = await askDecisions(io, { seed: decisions, only });
       if (answered === null) return null;

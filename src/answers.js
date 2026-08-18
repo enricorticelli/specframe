@@ -1,4 +1,5 @@
-// Non-interactive answer sources: `--set`, `--answers <file>`, and `--preset`.
+// Non-interactive answer sources: `--set`, `--answers <file>`, `--preset` and
+// `--blueprint`.
 //
 // These exist so the guided onboarding is scriptable — in CI, in a template
 // repository, or when re-creating a known configuration — without anyone having
@@ -8,6 +9,7 @@
 
 import { readFile } from 'node:fs/promises';
 
+import { resolveBlueprint } from './decisions/blueprints.js';
 import { DECISIONS, getDecision, getOption, isRelevant, recommendedValue } from './decisions/catalog.js';
 import { resolvePreset } from './decisions/presets.js';
 
@@ -74,9 +76,15 @@ export function validateAnswers(answers = {}) {
 }
 
 // Merge every non-interactive source in precedence order:
-// preset < answers file < --set. Later sources win per decision, so a preset
-// can be adjusted with a single `--set` without restating the rest.
-export async function collectAnswerSources({ preset, answersFile, set } = {}) {
+// preset < blueprint < answers file < --set. Later sources win per decision, so
+// a preset can be adjusted with a single `--set` without restating the rest.
+//
+// A blueprint beats a preset because the two answer different questions: the
+// preset is a posture applied to everything, the blueprint is the shape of this
+// particular system. `--preset strict --blueprint microservices` is a real
+// combination — strict everywhere, microservices in the architecture — and it
+// only means that if the shape wins where they overlap.
+export async function collectAnswerSources({ preset, blueprint, answersFile, set } = {}) {
   let mode;
   let answers = {};
 
@@ -84,6 +92,12 @@ export async function collectAnswerSources({ preset, answersFile, set } = {}) {
     const resolved = resolvePreset(preset);
     mode = resolved.mode;
     answers = { ...resolved.answers };
+  }
+
+  if (blueprint) {
+    const resolved = resolveBlueprint(blueprint);
+    mode = resolved.mode;
+    answers = { ...answers, ...resolved.answers };
   }
 
   if (answersFile) {
