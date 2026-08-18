@@ -1,7 +1,12 @@
-// A tiny line-based prompt kit. Zero dependencies, no raw mode, no cursor
-// control: every prompt is a printed block plus one line of input. That keeps it
-// usable over ssh and in dumb terminals, and — more importantly — keeps the
-// decision logic in pure parse functions that tests can drive without a TTY.
+// A tiny line-based prompt kit. Zero dependencies: every prompt is a printed
+// block plus one line of input. That keeps it usable over ssh and in dumb
+// terminals, and — more importantly — keeps the decision logic in pure parse
+// functions that tests can drive without a TTY.
+//
+// It is the baseline, not the fallback. picker.js adds an arrow-key surface on
+// top for real terminals, but it resolves to the shapes the parse functions
+// below return, so this file stays the definition of what an answer *is* and the
+// picker stays a way of giving one.
 //
 // The shortcut vocabulary is the same at every prompt, because the wizard is
 // long enough that having to remember two sets would be worse than having none:
@@ -33,6 +38,7 @@
 import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
+import { createKeyReader, keyboardAvailable } from './keys.js';
 import { terminalWidth, theme as defaultTheme, truncate, visibleWidth, wrapText } from './style.js';
 
 export const CONTROL = {
@@ -264,11 +270,17 @@ export function formatGroupHeader({
   ].join('\n');
 }
 
-export function formatQuestion({
+// The question without its options: counter, question, and the help line that
+// carries the ADR number.
+//
+// Split out because the option block has two renderers now — this static one and
+// the arrow-key picker — and only the options differ between them. The head is
+// printed once either way, which is also what keeps the picker's redraw cheap:
+// it repaints the options and never the question.
+export function formatQuestionHead({
   number,
   total,
   decision,
-  current = undefined,
   theme = defaultTheme,
   width = terminalWidth(),
 }) {
@@ -289,6 +301,19 @@ export function formatQuestion({
     ...help.map((line, i) =>
       i === 0 ? `      ${tag} ${theme.muted(line.trim())}` : theme.muted(line),
     ),
+  ].join('\n');
+}
+
+export function formatQuestion({
+  number,
+  total,
+  decision,
+  current = undefined,
+  theme = defaultTheme,
+  width = terminalWidth(),
+}) {
+  return [
+    formatQuestionHead({ number, total, decision, theme, width }),
     '',
     formatOptions(decision.options, { theme, width, current }),
     '',
@@ -337,13 +362,39 @@ export function formatError(message, { theme = defaultTheme } = {}) {
 
 // The wizard talks to this shape only, so tests can drive it with a scripted
 // list of answers instead of a terminal.
-export function createReadlineIo({ input = process.stdin, output = process.stdout } = {}) {
-  const rl = createInterface({ input, output });
+//
+// The readline interface is built per question and closed straight after, rather
+// than held open for the run. That is deliberate: readline and the picker both
+// want stdin's keypress events and raw mode, and two owners produce the classic
+// double-echo — every arrow key printed as `^[[A` into a line buffer nobody
+// reads. One owner at a time, handed over at each prompt, and neither has to
+// know the other exists.
+export function createReadlineIo({
+  input = process.stdin,
+  output = process.stdout,
+  env = process.env,
+} = {}) {
   return {
-    question: (prompt) => rl.question(prompt),
+    question: async (prompt) => {
+      const rl = createInterface({ input, output });
+      try {
+        return await rl.question(prompt);
+      } finally {
+        rl.close();
+      }
+    },
     log: (message = '') => output.write(`${message}\n`),
-    close: () => rl.close(),
+    close: () => {},
     interactive: Boolean(input.isTTY),
+
+    // Whether prompts may use the arrow-key picker, and how to open the keyboard
+    // when they do. False everywhere it cannot work, which is where the typed
+    // prompts take over unchanged.
+    keyboard: keyboardAvailable({ input, output, env }),
+    openKeys: () => createKeyReader({ input, output }),
+    write: (text) => output.write(text),
+    columns: () => output.columns || 80,
+    rows: () => output.rows || 24,
   };
 }
 
@@ -361,6 +412,9 @@ export function createScriptedIo(lines = []) {
     log: (message = '') => written.push(message),
     close: () => {},
     interactive: false,
+    // No keyboard: a scripted run answers in lines, which is what keeps the
+    // typed path the one every test exercises.
+    keyboard: false,
     output: written,
     remaining: () => queue.length,
   };

@@ -14,6 +14,7 @@ import {
   formatSectionDigest,
   openDecisionIds,
 } from './review.js';
+import { runPicker } from './picker.js';
 import { terminalWidth, theme, truncate, wrapText } from './style.js';
 import {
   CONTROL,
@@ -24,7 +25,7 @@ import {
   formatGroupHeader,
   formatKeys,
   formatOptions,
-  formatQuestion,
+  formatQuestionHead,
   formatSkipEcho,
   parseConfirmInput,
   parseGroupInput,
@@ -101,13 +102,35 @@ function sectionTitle(text, { width = terminalWidth() } = {}) {
   return `\n${theme.rule(width, text)}`;
 }
 
-// One numbered-choice prompt. Handles re-prompting on invalid input and on `?`
-// so callers only ever see a resolved outcome.
-async function askChoice(io, { header, options, multi = false, help, promptLabel }) {
+// The one prompt shape in the wizard: some prose, a numbered list, a choice.
+//
+// It has two input surfaces. On a real terminal the option list is an arrow-key
+// picker; everywhere else it is printed and the answer is typed. Both resolve to
+// the same outcomes, so every caller below — and everything downstream of them —
+// is written once and does not ask which one ran.
+//
+// `keys` is passed as pairs rather than as rendered text because the two
+// surfaces label the same keys differently: `enter` changes meaning once the
+// picker's cursor moves, and there is no point telling someone to type `1,2`
+// when they can hit space. `pickerKeys` overrides the list where that gap is
+// wider than the enter hint alone.
+async function askChoice(io, {
+  preamble,
+  options,
+  multi = false,
+  help,
+  current = undefined,
+  keys = [],
+  pickerKeys = null,
+  keyLayout = {},
+  promptLabel,
+}) {
   for (;;) {
-    io.log(header);
-    const raw = await io.question(promptLabel ?? PROMPT());
-    const result = parseQuestionInput(raw, { optionCount: options.length, multi });
+    io.log(preamble);
+
+    const result = usePicker(io)
+      ? await askByKey(io, { options, multi, current, keys: pickerKeys ?? keys })
+      : await askByLine(io, { options, multi, current, keys, keyLayout, promptLabel });
 
     if (result.kind === CONTROL.HELP) {
       const width = terminalWidth();
@@ -130,6 +153,52 @@ async function askChoice(io, { header, options, multi = false, help, promptLabel
   }
 }
 
+// SPECFRAME_NO_KEYS and every non-terminal case are already folded into
+// io.keyboard; this is only the seam that lets a caller hold a picker-less io.
+function usePicker(io) {
+  return Boolean(io.keyboard && io.openKeys);
+}
+
+async function askByLine(io, { options, multi, current, keys, keyLayout, promptLabel }) {
+  const width = terminalWidth();
+  io.log(formatOptions(options, { theme, width, current }));
+  if (keys.length > 0) {
+    io.log('');
+    io.log(formatKeys(keys, { theme, width, ...keyLayout }));
+  }
+  io.log('');
+  const raw = await io.question(promptLabel ?? PROMPT());
+  return parseQuestionInput(raw, { optionCount: options.length, multi });
+}
+
+async function askByKey(io, { options, multi, current, keys }) {
+  // The picker draws its own block and must never let a line soft-wrap, or the
+  // cursor arithmetic on the next frame walks up through the question above it.
+  // terminalWidth() has a floor of 60 for the tables' sake; here the terminal's
+  // real width wins.
+  const width = Math.min(terminalWidth(), Math.max(20, io.columns() - 1));
+  const reader = io.openKeys();
+  try {
+    return await runPicker({
+      options,
+      multi,
+      current,
+      keys,
+      enterHintMoved: multi ? 'take what is marked' : 'take the highlighted option',
+      reader,
+      write: io.write,
+      theme,
+      width,
+      rows: io.rows(),
+    });
+  } finally {
+    reader.close();
+  }
+}
+
+// The arrows, named for whichever glyphs this terminal admits to having.
+const MOVE_KEY = () => (theme.unicode ? '\u2191\u2193' : 'up/down');
+
 async function askProjectBasics(io, seed) {
   const width = terminalWidth();
   const defaultName = seed.projectName || getCurrentRepoName();
@@ -143,35 +212,38 @@ async function askProjectBasics(io, seed) {
   );
 
   const pmChoice = await askChoice(io, {
-    header: [
+    preamble: [
       sectionTitle('Package manager', { width }),
       theme.muted('  Referenced in generated guidelines and sample commands.'),
       '',
-      formatOptions(PACKAGE_MANAGERS, { theme, width }),
-      '',
-      formatKeys([['enter', 'npm'], ['?', 'why this matters']], { theme }),
     ].join('\n'),
     options: PACKAGE_MANAGERS,
+    keys: [['enter', 'npm'], ['?', 'why this matters']],
+    pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'npm'], ['?', 'why this matters']],
     help: 'Only affects the commands quoted in generated documents.',
   });
   const packageManager =
     pmChoice.kind === CONTROL.SELECT ? PACKAGE_MANAGERS[pmChoice.values[0] - 1].value : 'npm';
 
   const agentChoice = await askChoice(io, {
-    header: [
+    preamble: [
       sectionTitle('Agent assistants', { width }),
       ...wrapText(
-        'AGENTS.md is always generated and covers most tools. These add each tool\'s native files on top. Pick any number, comma-separated.',
+        `AGENTS.md is always generated and covers most tools. These add each tool's native files on top. Pick any number.`,
         width,
         '  ',
       ).map((line) => theme.muted(line)),
       '',
-      formatOptions(AGENT_TARGETS, { theme, width }),
-      '',
-      formatKeys([['1,2', 'pick several'], ['enter', 'none'], ['?', 'what each one gets']], { theme }),
     ].join('\n'),
     options: AGENT_TARGETS,
     multi: true,
+    keys: [['1,2', 'pick several'], ['enter', 'none'], ['?', 'what each one gets']],
+    pickerKeys: [
+      [MOVE_KEY(), 'move'],
+      ['space', 'mark'],
+      ['enter', 'none'],
+      ['?', 'what each one gets'],
+    ],
     help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
   });
   const agentTargets =
@@ -185,14 +257,10 @@ async function askProjectBasics(io, seed) {
 async function askMode(io) {
   const width = terminalWidth();
   const choice = await askChoice(io, {
-    header: [
-      sectionTitle('Onboarding mode', { width }),
-      '',
-      formatOptions(MODES, { theme, width }),
-      '',
-      formatKeys([['enter', 'guided'], ['?', 'the difference in full']], { theme }),
-    ].join('\n'),
+    preamble: [sectionTitle('Onboarding mode', { width }), ''].join('\n'),
     options: MODES,
+    keys: [['enter', 'guided'], ['?', 'the difference in full']],
+    pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'guided'], ['?', 'the difference in full']],
     help: MODES.map((m) => `${m.label}\n  ${m.hint}`).join('\n\n'),
   });
   return choice.kind === CONTROL.SELECT ? MODES[choice.values[0] - 1].value : 'guided';
@@ -215,22 +283,28 @@ async function askMode(io) {
 async function askBlueprint(io) {
   const width = terminalWidth();
   const choice = await askChoice(io, {
-    header: [
+    preamble: [
       sectionTitle('Blueprint', { width }),
       ...wrapText(
-        'Each one answers the architecture, design and data decisions the way that architecture answers them, plus what its shape forces on you. Nothing is written: every answer comes back as a question with your blueprint\'s answer already selected.',
+        `Each one answers the architecture, design and data decisions the way that architecture answers them, plus what its shape forces on you. Nothing is written: every answer comes back as a question with your blueprint's answer already selected.`,
         width,
         '  ',
       ).map((line) => theme.muted(line)),
       '',
-      formatOptions(BLUEPRINT_OPTIONS, { theme, width }),
-      '',
-      formatKeys(
-        [['1-' + BLUEPRINT_OPTIONS.length, 'choose'], ['enter', 'back'], ['?', 'what each one commits you to']],
-        { theme },
-      ),
     ].join('\n'),
     options: BLUEPRINT_OPTIONS,
+    // No blueprint is recommended, so the picker's cursor starts on none of them
+    // and `enter` keeps meaning what it says here: go back, do not pick.
+    keys: [
+      [`1-${BLUEPRINT_OPTIONS.length}`, 'choose'],
+      ['enter', 'back'],
+      ['?', 'what each one commits you to'],
+    ],
+    pickerKeys: [
+      [MOVE_KEY(), 'move'],
+      ['enter', 'back'],
+      ['?', 'what each one commits you to'],
+    ],
     help: BLUEPRINTS.map((b) => `${b.label}\n  ${b.description}`).join('\n\n'),
   });
 
@@ -286,32 +360,33 @@ async function askDecision(io, { decision, number, total, answers, lead = null }
     enterHint = current !== undefined ? `keep ${label}` : `${label} ${theme.glyph.star}`;
   }
 
-  const keys = formatKeys(
-    [
-      [`1-${decision.options.length}`, 'choose'],
-      ['enter', enterHint],
-      ['s', 'leave it open'],
-      ['?', 'why this matters'],
-      ['b', 'back'],
-      ['d', 'take every recommendation from here'],
-      ['a', 'leave the rest open'],
-      ['q', 'quit'],
-    ],
-    { theme, indent: '  ', gap: 2, width },
-  );
+  const tail = [
+    ['s', 'leave it open'],
+    ['?', 'why this matters'],
+    ['b', 'back'],
+    ['d', 'take every recommendation from here'],
+    ['a', 'leave the rest open'],
+    ['q', 'quit'],
+  ];
 
-  const header = [
+  const preamble = [
     lead ? `\n${theme.muted(lead)}` : null,
-    formatQuestion({ number, total, decision, theme, width, current }),
-    keys,
+    formatQuestionHead({ number, total, decision, theme, width }),
     '',
   ]
     .filter((part) => part !== null)
     .join('\n');
 
   return askChoice(io, {
-    header,
+    preamble,
     options: decision.options,
+    current,
+    keys: [[`1-${decision.options.length}`, 'choose'], ['enter', enterHint], ...tail],
+    // The number keys still work in the picker, but they stop being the headline:
+    // what you reach for is the arrows, and the digits are the shortcut for
+    // someone who already knows the list.
+    pickerKeys: [[MOVE_KEY(), 'move'], ['enter', enterHint], ...tail],
+    keyLayout: { indent: '  ', gap: 2 },
     help: [
       decision.help,
       '',
