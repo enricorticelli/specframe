@@ -27,6 +27,7 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 - 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical. Every agent's native config is a thin pointer back — no more syncing five instruction files by hand.
 - 🤖 **Broad agent support.** Claude, Copilot and Codex get full subagents, slash commands and skills in each tool's *current* convention. Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin, Jules and more read `AGENTS.md` natively — nothing extra needed.
+- 🧩 **Complements your harness, doesn't compete with it.** specframe writes no per-feature spec, plan or task file — [Spec Kit](https://github.com/github/spec-kit), [BMAD](https://github.com/bmad-code-org/BMAD-METHOD) and [OpenSpec](https://github.com/Fission-AI/OpenSpec) already do that well. It owns the layer they leave empty: the decision that outlives the change. See [Working alongside a spec/plan harness](#working-alongside-a-specplan-harness).
 - 🛡️ **Safe by design.** Idempotent and re-runnable. **Your files are never overwritten.** A manifest tracks what was generated, so updates stay surgical.
 - 📦 **Zero dependencies.** Nothing to audit, nothing to bloat.
 
@@ -43,11 +44,11 @@ Every section answers exactly one question — the same way for humans and agent
 | `docs/guidelines/` | *How do we usually build this?* | Conventions & patterns to follow by default. |
 | `docs/runbook/` | *What do we do when it breaks?* | Diagnostics and recovery procedures. |
 | `docs/glossary/` | *What do words mean here?* | Domain terms, grouped by area. |
-| `docs/DECISIONS.md` | *What haven't we decided yet?* | The open backlog, each entry with a reserved ADR number. |
+| `docs/DECISIONS.md` | *What haven't we decided yet — or ruled out?* | The open backlog, each entry with a reserved ADR number, plus what's been dismissed as not applicable here. |
 | `docs/README.md` | *What goes where?* | The map: when to write a rule vs a guideline vs an ADR. |
 | `AGENTS.md` | *Where do I find all of this?* | The canonical index every agent reads first. |
 
-A planner reads the ADRs and rules before proposing a plan. A reviewer checks diffs against enforced rules. A skill auto-drafts an ADR the moment a decision is being made. The loop stays closed.
+A conformance check reads diffs against enforced rules. A skill records an ADR the moment a decision is being made — with an agent in the loop, not a wizard. The loop stays closed.
 
 `DECISIONS.md` closes the *other* loop. An agent asked to add persistence to a repo that never chose a persistence model will pick one — silently, in a diff. Listing the decision as open turns that into a question instead of an accident.
 
@@ -62,6 +63,8 @@ npm install -g specframe     # then: specframe
 ```
 
 Requires **Node.js ≥ 18**. specframe always scaffolds at the **repo root** (nearest ancestor with `.git`), even from a deep subdirectory. No `.git`? It warns and falls back to the current folder — run `git init` first for a real repo.
+
+If you only ever ran `npx specframe` — never `npm install -g` — `specframe` isn't on `PATH`, and the scaffolded skills know it: `specframe-decide`, `specframe-record` and `bootstrapper` each carry a note to fall back to `npx --yes specframe <args>` when the plain command isn't found, rather than inventing an ADR by hand.
 
 After the project name, package manager and agent assistants, you pick one of **three ways in**.
 
@@ -182,11 +185,12 @@ npx specframe --mode blank
 
 The `bootstrapper` agent walks the checklist in `docs/DECISIONS.md`, hunts for evidence of each decision in the code — layout, config, migrations, CI, auth, instrumentation — and records only what it can prove, citing `path:line`. It writes through `specframe decide --detected`, so a reconstructed decision gets **the same canonical ADR, numbering and derived rules** a guided init would have produced. No parallel convention, no invented numbers.
 
-Three things it does deliberately:
+Four things it does deliberately:
 
 - **Leaves the unprovable open.** No evidence means the decision stays in `DECISIONS.md`. A confidently wrong ADR is worse than a visibly missing one.
 - **Flags partial adoption.** A decision the code follows in some places and not others is recorded *and* marked — usually the most valuable output of a first scan, since it's the decision the team believes it has made and hasn't.
 - **Doesn't pretend.** A `--detected` ADR says it documents an existing implementation, dates itself as *recorded not decided*, and asks you for the original reason — the one thing the code can't tell you.
+- **Proposes dismissals for what plainly doesn't apply.** A backend-only service has no frontend decisions to make, ever — the bootstrapper hands you a `specframe dismiss --group frontend --reason "..."` with the evidence of absence, rather than leaving nine questions open forever or, worse, deciding them itself. See [Decisions that don't apply](#decisions-that-dont-apply).
 
 Documents you already wrote are never touched, and a decision an existing ADR already covers is skipped rather than duplicated. Recording one by hand works the same way:
 
@@ -206,14 +210,21 @@ Pick agent assistants and specframe drops subagents, slash commands and skills i
 | Slash commands | `.claude/commands/*.md` | `.github/prompts/*.prompt.md` | `.agents/skills/` |
 | Skills | `.claude/skills/*/SKILL.md` | — | `.agents/skills/*/SKILL.md` |
 
-- **Subagents:** `explorer`, `planner`, `reviewer`
-- **Commands:** `/specframe-specify`, `/specframe-plan`, `/specframe-review`, `/specframe-bootstrap`
-  — `specify` and `plan` answer **in the conversation**, on purpose. specframe writes
-  no `prd/`, no `specs/`, no per-feature `spec.md`/`plan.md` pair: those are correct
-  until the change lands and stale after it. What outlives the change is the ADR,
-  rule or guideline the spec implied — which is why the commands hand you back to
-  `docs/`, and why there is nothing per-feature to maintain.
-- **Skills** (auto-triggered): `specframe-adr-draft` turns a conversation into a recorded decision · `specframe-rule-check` enforces your rules on every diff · `specframe-doc-sync` flags when a new convention or term appears in code without a matching doc.
+Everything shipped here is **decision-shaped**, on purpose. specframe writes no `prd/`,
+no `specs/`, no per-feature `spec.md`/`plan.md`/`tasks.md` — those belong to a spec/plan
+harness ([Spec Kit](https://github.com/github/spec-kit), [BMAD](https://github.com/bmad-code-org/BMAD-METHOD),
+[OpenSpec](https://github.com/Fission-AI/OpenSpec), or similar), which already does that
+well and is correct only until the change lands. See
+[Working alongside a spec/plan harness](#working-alongside-a-specplan-harness).
+
+- **Subagents:** `bootstrapper` (reconstructs the log from an existing codebase), `doc-writer` (mechanical: renders a decided entry to disk), `conformance` (reviews diffs against ADRs/rules/guidelines).
+- **Commands:**
+  - `/specframe-decide` — register a decision, catalog or project-specific, with an agent in the loop: it reads `specframe review`/`specframe explain` for the state and the tradeoffs, looks for evidence in the repo, then writes through the CLI.
+  - `/specframe-conform` — review current changes against ADRs, rules and guidelines.
+  - `/specframe-bootstrap` — populate the log from a codebase you already shipped.
+- **Skills** (auto-triggered): `specframe-decide` turns a conversation into a recorded catalog decision · `specframe-record` does the same for a decision the catalog never asked about (see [Decisions outside the catalog](#decisions-outside-the-catalog)) · `specframe-conform` enforces your rules on every diff · `specframe-doc-sync` flags when a new convention or term appears in code without a matching doc.
+
+`specframe-decide` is shipped as both a command and a skill from the same definition — invoke it explicitly, or let it trigger itself the moment a decision needs making.
 
 **Agents that don't read `AGENTS.md`** get a thin native pointer instead: `GEMINI.md` (yours to extend), `.continue/rules/specframe.md` and `.amazonq/rules/specframe.md` (managed). One canonical source, one thing to maintain.
 
@@ -231,7 +242,20 @@ Nothing already on disk moves. A document's number comes from the catalog, not f
 
 `decide` shows the same review table, with the decisions already recorded dimmed: they're there for context, but a recorded decision is superseded by editing its ADR, not by re-answering it.
 
-Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — and a README you've written in is refreshed too, section by section: only the `## Index` table (and, in `DECISIONS.md`, the two decision lists) is replaced, so your own headings and prose around it survive. Restructure one past recognition and specframe stops guessing: the refreshed version lands beside it as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
+Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — and a README you've written in is refreshed too, section by section: only the `## Index` table (and, in `DECISIONS.md`, the three decision lists) is replaced, so your own headings and prose around it survive. Restructure one past recognition and specframe stops guessing: the refreshed version lands beside it as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
+
+### Deciding with an agent, not a wizard
+
+The wizard is one way in; the `specframe-decide` command/skill is another, and it is the one meant for the moment a decision actually comes up — mid-conversation, while an agent is planning a change, rather than a dedicated terminal session:
+
+```bash
+specframe review --json                       # the state of every decision, as data
+specframe explain event-sourcing --json       # one decision's full brief: context,
+                                               # every option, its tradeoff, what it emits
+specframe decide --set event-sourcing=yes --dry-run --json   # preview as data, not console lines
+```
+
+An agent reads `review --json` to find what's open, `explain <id> --json` for the brief the interactive wizard's `?` shows, looks for evidence of each option in the repository it's actually working in — something no terminal wizard can do — and then writes through `specframe decide` like anything else. `specframe explain <id>` without `--json` prints the same brief for a human to read.
 
 ---
 
@@ -240,6 +264,7 @@ Your documents are never overwritten. The section indexes and `DECISIONS.md` *ar
 ```bash
 specframe review          # every decision this repo has recorded, as a table
 specframe review --open   # only what's still open
+specframe review --json   # the same, as data — what specframe-decide reads
 ```
 
 Reads `.specframe/manifest.json` and prints the section digest plus the full decision table — what was decided, which ADR carries it, and which answers merely took the recommendation. It's the one-command answer to "what did we agree on here", without opening thirty ADRs, and it writes nothing.
@@ -264,6 +289,37 @@ specframe revise --set tdd=strict -n                 # preview first
 - **It tells you what it opened.** Choosing microservices makes five questions relevant that a monolith had retired; the run says so and points at `specframe decide`.
 
 The ADRs teach the command: every generated ADR ends with the exact `specframe revise <id>` line for its own decision.
+
+---
+
+## Decisions that don't apply
+
+Not every catalog decision belongs to every repository — every frontend decision in a backend-only service, event sourcing in a plain CRUD app. Left open, those sit in `docs/DECISIONS.md` forever as phantom work, and the progress bar in `specframe review` can never reach 100%. Dismiss them instead of leaving them open:
+
+```bash
+specframe dismiss ui-surface --reason "backend-only service, no UI here"
+specframe dismiss --group frontend --reason "no UI in this repo"   # a whole section at once
+specframe restore ui-surface                                       # back in the backlog if that changes
+```
+
+- **It only applies to a decision still open.** An already-decided one is changed with `revise` instead — dismissing exists to get an *unanswered* question out of the backlog, not to un-record a choice.
+- **No ADR is written.** A dismissal is a claim about this repository's shape, not a decision with alternatives weighed — the record lives in `docs/DECISIONS.md`'s third section, under "Decisions that do not apply", and in the manifest.
+- **The reason is optional, but worth giving.** Left out, it renders as "not applicable to this repository"; in six months, that reads very differently from an actual reason.
+- **`--group` is the ergonomic core.** Gates don't cascade into a dismissal — it deliberately records nothing about *why* the group applies or not, only that it doesn't — so `--group frontend` lets one reason cover every open, relevant decision in a section in one call, which is what makes the catalog's 52 questions tractable for a repository that only needs a third of them.
+- **An agent proposes, never decides.** The bootstrapper's evidence-of-absence bucket hands you a copy-pasteable `specframe dismiss` command; it never runs one itself.
+
+---
+
+## Decisions outside the catalog
+
+Not every decision worth an ADR is one the catalog asks about — which payment provider to integrate is real, durable, and entirely specific to your project. `specframe decide` only knows the catalog's 52 questions, so it isn't the tool for this one:
+
+```bash
+specframe adr new payments-provider --title "Payment provider"
+specframe adr new payments-provider --title "Payment provider" --dry-run --json
+```
+
+Writes `docs/adr/9000-payments-provider.md` — empty Context/Decision/Consequences/Alternatives sections for you or an agent to fill in — and lists it under docs/adr/README.md's **Decisions outside the catalog** section. The number comes from a band (`9000` and up, in steps of 10) the catalog itself promises never to allocate, derived from what's already on disk rather than from the manifest, so it can never collide with a decision a future specframe version adds to the catalog. The `specframe-record` skill is the agent-driven version of this same command.
 
 ---
 
@@ -296,6 +352,8 @@ A newer specframe may add decisions to the catalog. `update` never re-prompts fo
 
 > **Upgrading from 0.4.x or earlier.** The `empty` / `universal` content profiles are gone, replaced by the two modes above. A `universal` repo keeps everything it has — `docs/**` is yours and `update` has never touched it — and is treated as blank from here. The baseline `universal` shipped as two long READMEs now lives as individual rules and guidelines, emitted only by the decisions that call for them; `specframe decide` opts back into it.
 
+> **Upgrading from 0.7.x or earlier.** specframe no longer ships the harness-shaped assets a dedicated spec/plan tool already does better: the `explorer` and `planner` subagents, `/specframe-specify`, `/specframe-plan`, and the `specframe-adr-draft`/`specframe-rule-check` skills are gone — see [Working alongside a spec/plan harness](#working-alongside-a-specplan-harness) for why. `reviewer` is renamed `conformance`, `/specframe-review` is renamed `/specframe-conform`, and `specframe-adr-draft`/`specframe-rule-check` become `specframe-decide`/`specframe-conform`. Run `update`: an asset you never touched is removed outright; one you hand-edited is left in place and reported, never deleted. `docs/INTEROP.md` is added as a new user-owned file. Nothing under `docs/**` moves.
+
 ---
 
 ## Uninstalling
@@ -310,6 +368,21 @@ Removes the files specframe **owns** (managed tooling), then deletes the manifes
 | --- | --- |
 | `-n`, `--dry-run` | Preview removals. |
 | `--purge` | Also delete the user-owned starters — a completely clean slate. Opt-in, because that's *your* work. |
+
+---
+
+## Working alongside a spec/plan harness
+
+specframe is not an alternative to [GitHub Spec Kit](https://github.com/github/spec-kit), [BMAD-METHOD](https://github.com/bmad-code-org/BMAD-METHOD), [OpenSpec](https://github.com/Fission-AI/OpenSpec), or any tool like them — it's built to sit next to one. The division is by lifecycle, not by feature:
+
+| | Owns | Correct until | Lives in |
+| --- | --- | --- | --- |
+| A spec/plan harness | The **change** — a spec, a plan, a set of tasks | The change merges | `.specify/`, `openspec/`, `_bmad/`, or similar |
+| specframe | The **decision** — the ADR, the rule, the guideline it produced | As long as the repository does | `docs/`, `AGENTS.md` |
+
+A plan is allowed to *answer* a question that outlives the change — "we're adding persistence, so what's the storage model?" — but the answer belongs in an ADR referenced from the plan, not buried in it: a spec file is a fossil the moment its change lands, and nobody re-reads last quarter's plan to find out why the schema looks the way it does.
+
+specframe never reads or writes another tool's directory — no detection, no generated pointer files, nothing to keep in sync. The whole integration is `docs/INTEROP.md`, scaffolded into every new repo (and added to existing ones on `update`): it names where each tool's artifacts live, and gives an agent driving either one the same instruction — check `docs/rules/` and `docs/DECISIONS.md` before writing a spec or a plan, and record a decision with `specframe decide` or `specframe adr new` before building on it. If the other tool has its own "constitution" slot (Spec Kit's `constitution.md`, OpenSpec's `project.md`), point it at `docs/rules/` and `docs/adr/` rather than duplicating them — two copies of the same rule is how one of them goes stale.
 
 ---
 

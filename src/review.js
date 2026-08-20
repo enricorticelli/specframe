@@ -19,34 +19,45 @@ import { plainTheme, terminalWidth } from './style.js';
 /**
  * Project answers into the review model.
  *
- * @param {object} answers  { [decisionId]: optionValue }
+ * @param {object} answers    { [decisionId]: optionValue }
+ * @param {object} [options]
+ * @param {object} [options.dismissed]  { [decisionId]: { date, reason } } —
+ *                                      decisions declared not applicable to
+ *                                      this repository. See resolveDecisions.
  * @returns {{
  *   groups: object[], rows: object[], decided: number, open: number,
- *   total: number, notApplicable: object[], resolved: object,
+ *   dismissed: number, total: number, notApplicable: object[], resolved: object,
  * }}
  * Row numbering is global and follows catalog order, so the number beside a
  * decision is stable for as long as the answers are — which is what makes
- * "type 12 to change it" safe to offer.
+ * "type 12 to change it" safe to offer. Dismissed decisions get a row too —
+ * addressable, same as any other — because restoring one starts from here.
  */
-export function buildReview(answers = {}) {
-  const resolved = resolveDecisions({ mode: 'guided', answers });
+export function buildReview(answers = {}, { dismissed = {} } = {}) {
+  const resolved = resolveDecisions({ mode: 'guided', answers, dismissed });
 
   const decidedById = new Map(resolved.decided.map((entry) => [entry.decision.id, entry]));
   const openIds = new Set(resolved.open.map((entry) => entry.decision.id));
+  const dismissedById = new Map(resolved.dismissed.map((entry) => [entry.decision.id, entry]));
 
   let index = 0;
   const groups = GROUPS.map((group) => {
     const rows = DECISIONS.filter(
-      (decision) => decision.group === group.id && (decidedById.has(decision.id) || openIds.has(decision.id)),
+      (decision) =>
+        decision.group === group.id &&
+        (decidedById.has(decision.id) || openIds.has(decision.id) || dismissedById.has(decision.id)),
     ).map((decision) => {
       const hit = decidedById.get(decision.id);
+      const dismissal = dismissedById.get(decision.id);
       index += 1;
       return {
         index,
         group,
         decision,
         option: hit?.option ?? null,
-        status: hit ? 'decided' : 'open',
+        status: hit ? 'decided' : dismissal ? 'dismissed' : 'open',
+        reason: dismissal?.reason ?? null,
+        dismissedOn: dismissal?.date ?? null,
         recommended: hit ? hit.option.value === recommendedValue(decision) : false,
       };
     });
@@ -56,6 +67,7 @@ export function buildReview(answers = {}) {
       rows,
       decided: rows.filter((row) => row.status === 'decided').length,
       open: rows.filter((row) => row.status === 'open').length,
+      dismissed: rows.filter((row) => row.status === 'dismissed').length,
     };
   }).filter((entry) => entry.rows.length > 0);
 
@@ -67,6 +79,7 @@ export function buildReview(answers = {}) {
     total: rows.length,
     decided: rows.filter((row) => row.status === 'decided').length,
     open: rows.filter((row) => row.status === 'open').length,
+    dismissed: rows.filter((row) => row.status === 'dismissed').length,
     notApplicable: resolved.notApplicable,
     resolved,
   };
@@ -78,6 +91,36 @@ export function findReviewRow(review, index) {
 
 export function openDecisionIds(review) {
   return review.rows.filter((row) => row.status === 'open').map((row) => row.decision.id);
+}
+
+/**
+ * The same review, as plain data — for `specframe review --json`. An agent
+ * gets the state of every decision this repository has recorded or left open
+ * without parsing the table a human reads; `specframe explain <id> --json`
+ * is the next step once it has picked one.
+ */
+export function reviewToJSON(review) {
+  return {
+    counts: { total: review.total, decided: review.decided, open: review.open, dismissed: review.dismissed },
+    decisions: review.rows.map((row) => ({
+      id: row.decision.id,
+      group: row.group.id,
+      title: row.decision.title,
+      status: row.status,
+      value: row.option?.value ?? null,
+      label: row.option?.label ?? null,
+      recommended: row.recommended,
+      recommendedValue: recommendedValue(row.decision) ?? null,
+      adr: row.decision.adr,
+      adrPath: row.status === 'decided' ? `docs/adr/${row.decision.adr}-${row.decision.slug}.md` : null,
+      dismissedReason: row.status === 'dismissed' ? row.reason : null,
+      dismissedOn: row.status === 'dismissed' ? row.dismissedOn : null,
+    })),
+    // Not to be confused with `dismissed` above: this is a decision a gate
+    // retired that a value was still supplied for, an input-error channel that
+    // predates dismissal and means something else entirely — see resolve.js.
+    notApplicable: review.notApplicable.map((entry) => ({ id: entry.decision.id, value: entry.value })),
+  };
 }
 
 // A decision's short name for the table. `title` is the catalog's own label;
@@ -101,26 +144,37 @@ export function formatSectionDigest(review, { theme = plainTheme, width = termin
     { label: 'Progress', min: 12, fixed: true },
   ];
 
+  // A dismissed decision is not outstanding work, so it must not keep the bar
+  // from ever reaching 100% — but it is also not "answered". It is excluded
+  // from the denominator entirely: `applicable` is what is left once a
+  // decision this repository will never take is set aside.
+  const applicable = (entry) => entry.rows.length - entry.dismissed;
+
   const rows = review.groups.map((entry) => ({
     cells: [
       entry.group.title,
-      theme.bold(`${entry.decided}/${entry.rows.length}`),
+      theme.bold(`${entry.decided}/${applicable(entry)}`),
       entry.open > 0 ? theme.warn(String(entry.open)) : theme.muted('0'),
-      theme.bar(entry.decided, entry.rows.length),
+      theme.bar(entry.decided, applicable(entry)),
     ],
   }));
+
+  const totalApplicable = review.total - review.dismissed;
 
   rows.push({ rule: true });
   rows.push({
     cells: [
       theme.bold('Total'),
-      theme.bold(`${review.decided}/${review.total}`),
+      theme.bold(`${review.decided}/${totalApplicable}`),
       review.open > 0 ? theme.warn(String(review.open)) : theme.muted('0'),
-      theme.bar(review.decided, review.total),
+      theme.bar(review.decided, totalApplicable),
     ],
   });
 
-  return renderTable({ columns, rows, width, theme });
+  const table = renderTable({ columns, rows, width, theme });
+  return review.dismissed > 0
+    ? `${table}\n\n  ${theme.muted(`${review.dismissed} dismissed as not applicable`)}`
+    : table;
 }
 
 /**
@@ -157,6 +211,7 @@ export function formatReviewTable(
   let lockedShown = false;
   let recShown = false;
   let openShown = false;
+  let dismissedShown = false;
 
   for (const entry of review.groups) {
     const visible = openOnly ? entry.rows.filter((row) => row.status === 'open') : entry.rows;
@@ -164,13 +219,14 @@ export function formatReviewTable(
 
     rows.push({
       section: entry.group.title,
-      note: `${entry.decided} of ${entry.rows.length} answered`,
+      note: `${entry.decided} of ${entry.rows.length - entry.dismissed} answered`,
     });
 
     for (const row of visible) {
       shown += 1;
       if (row.recommended) recShown = true;
       if (row.status === 'open') openShown = true;
+      if (row.status === 'dismissed') dismissedShown = true;
       const locked = editable && !editable.has(row.decision.id);
       if (locked) lockedShown = true;
       const number = locked ? theme.muted(String(row.index)) : theme.accent(String(row.index));
@@ -181,9 +237,13 @@ export function formatReviewTable(
         cells: [
           number,
           decisionLabel(row.decision),
-          row.status === 'open' ? theme.warn('not decided') : theme.bold(row.option.label),
+          row.status === 'open'
+            ? theme.warn('not decided')
+            : row.status === 'dismissed'
+              ? theme.muted('does not apply')
+              : theme.bold(row.option.label),
           row.recommended ? theme.muted('*') : '',
-          row.status === 'open' ? theme.muted('—') : theme.tag(row.decision.adr),
+          row.status === 'decided' ? theme.tag(row.decision.adr) : theme.muted('—'),
         ],
       });
     }
@@ -199,6 +259,9 @@ export function formatReviewTable(
     recShown ? `  ${theme.muted('Rec *')} ${theme.muted('= the recommended option')}` : '',
     openShown
       ? `  ${theme.warn('not decided')} ${theme.muted('= stays open, listed in docs/DECISIONS.md')}`
+      : '',
+    dismissedShown
+      ? `  ${theme.muted('does not apply')} ${theme.muted('= dismissed, recorded in docs/DECISIONS.md, no ADR')}`
       : '',
     lockedShown
       ? `  ${theme.muted('a dimmed number is already recorded — supersede it by editing its ADR')}`

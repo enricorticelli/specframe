@@ -71,6 +71,28 @@ test('s is the only way to leave a question unanswered', async () => {
   assert.equal(config.decisions['architecture-style'], undefined);
 });
 
+test('x dismisses a single decision, with the typed reason', async () => {
+  const config = await run(['', 'x', 'no architecture decisions apply here', 'a']);
+  assert.equal(config.decisions['architecture-style'], undefined, 'dismissed, not decided');
+  assert.deepEqual(config.dismissed['architecture-style'], { reason: 'no architecture decisions apply here' });
+});
+
+test('an empty reason at x records null, not a placeholder string', async () => {
+  const config = await run(['', 'x', '', 'a']);
+  assert.equal(config.dismissed['architecture-style'].reason, null);
+});
+
+test('x at a section gate dismisses every decision in it, with one shared reason', async () => {
+  const config = await run(['x', 'backend-only service', 'a']);
+  for (const id of ['architecture-style', 'inter-component-comm', 'api-style']) {
+    assert.deepEqual(config.dismissed[id], { reason: 'backend-only service' }, `${id} was dismissed`);
+    assert.equal(config.decisions[id], undefined);
+  }
+  // The next section was reached and closed with 'a', proving the dismissed
+  // section was not re-asked question by question.
+  assert.equal(config.decisions.layering, undefined);
+});
+
 test('enter takes the recommended option, because that is what enter means', async () => {
   const config = await run(['', '', 'a']);
   assert.equal(

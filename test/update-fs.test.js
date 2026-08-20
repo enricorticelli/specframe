@@ -15,7 +15,7 @@ const CONFIG = {
   agentTargets: ['claude'],
 };
 
-const EXPLORER = '.claude/agents/explorer.md';
+const MANAGED_AGENT = '.claude/agents/bootstrapper.md';
 const CLAUDE_MD = 'CLAUDE.md';
 
 async function makeRepo() {
@@ -46,8 +46,10 @@ test('init writes a manifest capturing version and config', async () => {
       decisions: {},
       provenance: {},
       revisions: {},
+      dismissed: {},
+      localAdrs: [],
     });
-    assert.ok(manifest.files[EXPLORER].managed, 'explorer is managed');
+    assert.ok(manifest.files[MANAGED_AGENT].managed, 'bootstrapper is managed');
     assert.equal(manifest.files[CLAUDE_MD].managed, false, 'CLAUDE.md is user-owned');
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -57,9 +59,9 @@ test('init writes a manifest capturing version and config', async () => {
 test('update recreates a deleted managed file', async () => {
   const dir = await makeRepo();
   try {
-    await rm(abs(dir, EXPLORER));
+    await rm(abs(dir, MANAGED_AGENT));
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0' });
-    assert.ok(await exists(abs(dir, EXPLORER)), 'explorer should be restored');
+    assert.ok(await exists(abs(dir, MANAGED_AGENT)), 'bootstrapper should be restored');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -79,11 +81,11 @@ test('update never clobbers a user-edited user-owned file', async () => {
 test('update writes a .specframe-new beside a user-edited managed file', async () => {
   const dir = await makeRepo();
   try {
-    await writeFile(abs(dir, EXPLORER), 'hand-edited agent', 'utf8');
+    await writeFile(abs(dir, MANAGED_AGENT), 'hand-edited agent', 'utf8');
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0' });
 
-    assert.equal(await readFile(abs(dir, EXPLORER), 'utf8'), 'hand-edited agent', 'original kept');
-    assert.ok(await exists(`${abs(dir, EXPLORER)}.specframe-new`), '.specframe-new written');
+    assert.equal(await readFile(abs(dir, MANAGED_AGENT), 'utf8'), 'hand-edited agent', 'original kept');
+    assert.ok(await exists(`${abs(dir, MANAGED_AGENT)}.specframe-new`), '.specframe-new written');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -92,9 +94,9 @@ test('update writes a .specframe-new beside a user-edited managed file', async (
 test('update --force overwrites a user-edited managed file', async () => {
   const dir = await makeRepo();
   try {
-    await writeFile(abs(dir, EXPLORER), 'hand-edited agent', 'utf8');
+    await writeFile(abs(dir, MANAGED_AGENT), 'hand-edited agent', 'utf8');
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0', force: true });
-    assert.notEqual(await readFile(abs(dir, EXPLORER), 'utf8'), 'hand-edited agent');
+    assert.notEqual(await readFile(abs(dir, MANAGED_AGENT), 'utf8'), 'hand-edited agent');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -113,9 +115,9 @@ test('update bumps the manifest version', async () => {
 test('update --dry-run changes nothing on disk', async () => {
   const dir = await makeRepo();
   try {
-    await rm(abs(dir, EXPLORER));
+    await rm(abs(dir, MANAGED_AGENT));
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0', dryRun: true });
-    assert.equal(await exists(abs(dir, EXPLORER)), false, 'no writes in dry-run');
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), false, 'no writes in dry-run');
     assert.equal((await readManifest(dir)).version, '0.1.0', 'manifest untouched');
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -142,16 +144,44 @@ test('update records the hash it wrote, not the one it skipped', async () => {
   }
 });
 
+test('update removes an untouched managed file the new config no longer produces', async () => {
+  const dir = await makeRepo();
+  try {
+    // Dropping the claude target is what a real orphan looks like: every
+    // .claude/** asset the manifest tracked is no longer in this run's plan.
+    await updateTemplateSet({ targetDir: dir, ...CONFIG, agentTargets: [], version: '0.2.0' });
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), false, 'untouched orphan is removed outright');
+    assert.equal(await exists(abs(dir, '.claude')), false, '.claude pruned once empty');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('update only reports, never removes, an orphan the user edited by hand', async () => {
+  const dir = await makeRepo();
+  try {
+    await writeFile(abs(dir, MANAGED_AGENT), 'my own notes in here', 'utf8');
+    await updateTemplateSet({ targetDir: dir, ...CONFIG, agentTargets: [], version: '0.2.0' });
+    assert.equal(
+      await readFile(abs(dir, MANAGED_AGENT), 'utf8'),
+      'my own notes in here',
+      'edited orphan is left in place, not deleted',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('a file kept once is still protected on the run after', async () => {
   const dir = await makeRepo();
   try {
-    await writeFile(abs(dir, EXPLORER), 'hand-edited agent', 'utf8');
+    await writeFile(abs(dir, MANAGED_AGENT), 'hand-edited agent', 'utf8');
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0' });
-    await rm(`${abs(dir, EXPLORER)}.specframe-new`);
+    await rm(`${abs(dir, MANAGED_AGENT)}.specframe-new`);
     await updateTemplateSet({ targetDir: dir, ...CONFIG, projectName: 'renamed', version: '0.3.0' });
 
-    assert.equal(await readFile(abs(dir, EXPLORER), 'utf8'), 'hand-edited agent', 'never adopted');
-    assert.ok(await exists(`${abs(dir, EXPLORER)}.specframe-new`), 'still offered beside it');
+    assert.equal(await readFile(abs(dir, MANAGED_AGENT), 'utf8'), 'hand-edited agent', 'never adopted');
+    assert.ok(await exists(`${abs(dir, MANAGED_AGENT)}.specframe-new`), 'still offered beside it');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

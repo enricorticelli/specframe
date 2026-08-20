@@ -16,6 +16,11 @@
 //               Never reuse. The range is the group's position in GROUPS, so a
 //               new group is appended — never inserted, which would renumber
 //               every ADR after it in repositories that already have them.
+//               This catalog will never use a number ≥ LOCAL_ADR_MIN (9000):
+//               that band is reserved for `specframe adr new`, which records a
+//               decision outside the catalog. Appending a group here can add
+//               at most one range per group forever, so the gap is headroom
+//               enough that the two will never collide.
 //   question    asked in the wizard.
 //   help        shown on `?`, and as the "why this matters" line in DECISIONS.md.
 //   context     the ADR's Context section: why the decision exists at all.
@@ -3325,3 +3330,12 @@ export const REGISTRIES = {
   runbooks: RUNBOOKS,
   glossary: GLOSSARY_TERMS,
 };
+
+// A decision outside this catalog — "which payment provider" — gets an ADR
+// number from `specframe adr new`, never allocated by hand (see writer.js's
+// recordLocalAdr). This band is the contract that makes that safe: the
+// catalog will never place a decision here, no matter how many groups are
+// appended, so a project-specific ADR can never collide with one a future
+// specframe version adds. Enforced by catalog.test.js.
+export const LOCAL_ADR_MIN = 9000;
+export const LOCAL_ADR_STEP = 10;

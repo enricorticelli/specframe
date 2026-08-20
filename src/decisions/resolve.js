@@ -75,6 +75,19 @@ function partitionAnswers(answers) {
  *                                    the ADR renders it as its own history: a
  *                                    decision that changed silently is a decision
  *                                    nobody can trust.
+ * @param {object}  input.dismissed   { [decisionId]: { date, reason } }. A
+ *                                    decision the user has declared can never
+ *                                    apply to this repository — every frontend
+ *                                    decision in a backend-only service, say.
+ *                                    Unlike an unanswered decision it does not
+ *                                    belong in the open backlog, is never
+ *                                    re-offered by `decide`, and produces no
+ *                                    ADR: it is a claim about this repository's
+ *                                    shape, recorded in docs/DECISIONS.md only.
+ *                                    Not to be confused with `notApplicable`
+ *                                    below, which is a *gate* retiring a
+ *                                    decision because of another answer — this
+ *                                    is the user saying so directly.
  * @returns resolved document set — see the shape assembled at the end.
  */
 export function resolveDecisions({
@@ -82,12 +95,14 @@ export function resolveDecisions({
   answers = {},
   provenance = {},
   revisions = {},
+  dismissed = {},
 } = {}) {
   const { valid, invalid } = partitionAnswers(mode === 'blank' ? {} : answers);
 
   const decided = [];
   const open = [];
   const notApplicable = [];
+  const dismissedList = [];
 
   // Walked in catalog order, accumulating the answers that actually apply.
   // Gates only ever reference decisions that come earlier, so relevance can be
@@ -102,15 +117,30 @@ export function resolveDecisions({
 
     if (!isRelevant(decision, effective)) {
       if (value !== undefined) notApplicable.push({ decision, value });
+      // A dismissal on a decision the gate already retired is inert — nothing
+      // would be reported for it anyway, so it is left out of every bucket
+      // rather than double-reporting a decision the catalog itself excluded.
       continue;
     }
 
     if (value !== undefined) {
+      // Decided wins over dismissed: normalizeConfig already prunes a
+      // dismissal once its decision is answered, this is the fallback for a
+      // hand-edited manifest that recorded both.
       effective[decision.id] = value;
       decided.push({ decision, option: getOption(decision, value) });
-    } else {
-      open.push({ decision });
+      continue;
     }
+
+    const dismissal = dismissed[decision.id];
+    if (dismissal) {
+      // Not written into `effective`: a dismissal is not an answer, and the
+      // `when` contract above says an unknown answer keeps followers relevant.
+      dismissedList.push({ decision, reason: dismissal.reason ?? null, date: dismissal.date ?? null });
+      continue;
+    }
+
+    open.push({ decision });
   }
 
   // --- ADRs: one per decision taken -----------------------------------------
@@ -205,6 +235,7 @@ export function resolveDecisions({
     open,
     invalid,
     notApplicable,
+    dismissed: dismissedList,
     adrs,
     rules: materialize('rules'),
     guidelines: materialize('guidelines'),
@@ -227,6 +258,7 @@ export function summarize(resolved) {
   return {
     decided: resolved.decided.length,
     open: resolved.open.length,
+    dismissed: resolved.dismissed.length,
     adrs: resolved.adrs.length,
     rules: resolved.rules.length,
     guidelines: resolved.guidelines.length,

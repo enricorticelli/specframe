@@ -27,6 +27,12 @@ unrecorded decision made by an agent is the exact failure this repository is
 structured to prevent. Propose the decision, name the trade-off, and let it be
 recorded — then implement it.
 
+The same file also lists decisions dismissed as **not applicable here** — every
+frontend decision in a backend-only service, say. Treat that the same as a
+recorded choice: do not propose an option for it. If a task seems to need one
+anyway, say the dismissal looks wrong and why, and let a human decide whether
+to restore it — do not silently work around it.
+
 ## When something new emerges
 
 - A new architectural choice → draft an ADR in `docs/adr/`.
@@ -41,5 +47,11 @@ it affected.
 
 Agent roles and commands (if scaffolded): see .claude/, .github/, or .codex/
 depending on the tool in use.
+
+## Using this alongside a spec/plan tool
+
+If this repository also uses Spec Kit, BMAD, OpenSpec, or a similar harness,
+see `docs/INTEROP.md` for how the two divide labour: that tool owns the spec
+and the plan for one change; this scaffold owns the decision that outlives it.
 
 In the final summary, list the decision documents you consulted.

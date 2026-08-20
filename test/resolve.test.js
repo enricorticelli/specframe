@@ -91,6 +91,61 @@ test('a question stays open while the answer that gates it is missing', () => {
   assert.ok(ids.includes('contract-testing'), 'unknown architecture keeps it relevant');
 });
 
+test('a dismissed decision leaves the open backlog without being decided', () => {
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: {},
+    dismissed: { tdd: { date: '2026-01-01', reason: 'no code here yet' } },
+  });
+  assert.deepEqual(resolved.dismissed.map((d) => d.decision.id), ['tdd']);
+  assert.equal(resolved.dismissed[0].reason, 'no code here yet');
+  assert.equal(resolved.dismissed[0].date, '2026-01-01');
+  assert.ok(!resolved.decided.some((d) => d.decision.id === 'tdd'));
+  assert.ok(!resolved.open.some((o) => o.decision.id === 'tdd'), 'dismissed, not merely open');
+});
+
+test('an omitted reason comes back null rather than a placeholder string', () => {
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: {},
+    dismissed: { tdd: { date: '2026-01-01' } },
+  });
+  assert.equal(resolved.dismissed[0].reason, null);
+});
+
+test('a decided decision wins over a dismissal recorded for the same id', () => {
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: { tdd: 'strict' },
+    dismissed: { tdd: { date: '2026-01-01', reason: 'stale' } },
+  });
+  assert.equal(resolved.decided.length, 1);
+  assert.equal(resolved.decided[0].decision.id, 'tdd');
+  assert.deepEqual(resolved.dismissed, []);
+});
+
+test('a dismissal on a question a gate has already retired lands in no bucket at all', () => {
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: { 'architecture-style': 'modular-monolith' },
+    dismissed: { 'contract-testing': { date: '2026-01-01', reason: 'irrelevant here' } },
+  });
+  assert.deepEqual(resolved.dismissed, [], 'the gate already retired it — nothing to report');
+  assert.deepEqual(resolved.notApplicable, [], 'not to be confused with the gate-retirement channel');
+  assert.ok(!resolved.open.some((o) => o.decision.id === 'contract-testing'));
+});
+
+test('dismissals are honoured in blank mode, unlike answers', () => {
+  const resolved = resolveDecisions({
+    mode: 'blank',
+    answers: { tdd: 'strict' },
+    dismissed: { 'clean-code': { date: '2026-01-01', reason: 'legacy code, not worth chasing' } },
+  });
+  assert.deepEqual(resolved.decided, [], 'blank mode still takes no decisions');
+  assert.deepEqual(resolved.dismissed.map((d) => d.decision.id), ['clean-code']);
+  assert.equal(resolved.open.length, DECISIONS.length - 1);
+});
+
 test('unknown decisions and options are reported', () => {
   const resolved = guided({ 'not-a-decision': 'x', tdd: 'not-an-option' });
   assert.equal(resolved.decided.length, 0);
@@ -149,9 +204,21 @@ test('open decisions group in catalog order, skipping empty groups', () => {
 test('summarize counts what will be written', () => {
   const s = summarize(guided({ 'event-sourcing': 'yes' }));
   assert.equal(s.decided, 1);
+  assert.equal(s.dismissed, 0);
   assert.equal(s.adrs, 1);
   assert.equal(s.rules, 1);
   assert.equal(s.guidelines, 2);
   assert.equal(s.runbooks, 1);
   assert.equal(s.glossaryTerms, 3);
+});
+
+test('summarize counts dismissals separately from decisions taken', () => {
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: { 'event-sourcing': 'yes' },
+    dismissed: { tdd: { date: '2026-01-01', reason: 'n/a' } },
+  });
+  const s = summarize(resolved);
+  assert.equal(s.decided, 1);
+  assert.equal(s.dismissed, 1);
 });

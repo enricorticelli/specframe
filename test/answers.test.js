@@ -129,6 +129,19 @@ test('defaults can be limited to a subset, for `specframe decide`', () => {
   assert.deepEqual(filled, { tdd: 'pragmatic' });
 });
 
+test('recommended defaults never fill in a dismissed decision', () => {
+  // The regression this guards: a dismissal is not a gate, so `isRelevant`
+  // alone cannot tell it apart from an ordinary unanswered question — without
+  // the explicit check, `--yes` or the wizard's `d` would silently un-dismiss
+  // every decision the user declared out of scope.
+  const filled = applyRecommendedDefaults(
+    {},
+    { dismissed: { tdd: { date: '2026-01-01', reason: 'no code here yet' } } },
+  );
+  assert.equal(filled.tdd, undefined, 'still not answered');
+  assert.equal(filled['clean-code'], 'yes', 'everything else is still filled as usual');
+});
+
 // --- presets ----------------------------------------------------------------
 
 test('every preset resolves to answers the catalog accepts', () => {

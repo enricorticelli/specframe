@@ -16,7 +16,7 @@ const CONFIG = {
   agentTargets: ['claude'],
 };
 
-const EXPLORER = '.claude/agents/explorer.md';
+const MANAGED_AGENT = '.claude/agents/bootstrapper.md';
 const CLAUDE_MD = 'CLAUDE.md';
 
 const abs = (dir, rel) => path.join(dir, ...rel.split('/'));
@@ -42,13 +42,13 @@ test('planUninstallActions removes only managed files by default', () => {
   const manifest = {
     version: '0.1.0',
     files: {
-      [EXPLORER]: { sha256: 'x', managed: true },
+      [MANAGED_AGENT]: { sha256: 'x', managed: true },
       [CLAUDE_MD]: { sha256: 'y', managed: false },
     },
   };
   const actions = planUninstallActions({ manifest });
   const byRel = Object.fromEntries(actions.map((a) => [a.relpath, a.action]));
-  assert.equal(byRel[EXPLORER], 'remove');
+  assert.equal(byRel[MANAGED_AGENT], 'remove');
   assert.equal(byRel[CLAUDE_MD], 'keep');
 });
 
@@ -56,7 +56,7 @@ test('planUninstallActions with purge removes user-owned files too', () => {
   const manifest = {
     version: '0.1.0',
     files: {
-      [EXPLORER]: { sha256: 'x', managed: true },
+      [MANAGED_AGENT]: { sha256: 'x', managed: true },
       [CLAUDE_MD]: { sha256: 'y', managed: false },
     },
   };
@@ -76,7 +76,7 @@ test('uninstall removes managed files and the manifest, leaves user-owned', asyn
   try {
     await uninstallTemplateSet({ targetDir: dir });
 
-    assert.equal(await exists(abs(dir, EXPLORER)), false, 'managed file removed');
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), false, 'managed file removed');
     assert.equal(await exists(abs(dir, '.specframe/manifest.json')), false, 'manifest removed');
     assert.equal(await exists(abs(dir, CLAUDE_MD)), true, 'user-owned file kept');
     assert.equal(await exists(abs(dir, 'AGENTS.md')), true, 'AGENTS.md kept');
@@ -94,7 +94,7 @@ test('uninstall --purge removes everything including user-owned files', async ()
   try {
     await uninstallTemplateSet({ targetDir: dir, purge: true });
 
-    assert.equal(await exists(abs(dir, EXPLORER)), false, 'managed file removed');
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), false, 'managed file removed');
     assert.equal(await exists(abs(dir, CLAUDE_MD)), false, 'user-owned file removed');
     assert.equal(await exists(abs(dir, 'AGENTS.md')), false, 'AGENTS.md removed');
     assert.equal(await exists(abs(dir, 'docs')), false, 'docs dir pruned');
@@ -109,7 +109,7 @@ test('uninstall --dry-run removes nothing', async () => {
   try {
     await uninstallTemplateSet({ targetDir: dir, dryRun: true });
 
-    assert.equal(await exists(abs(dir, EXPLORER)), true, 'managed file untouched');
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), true, 'managed file untouched');
     assert.equal(await exists(abs(dir, '.specframe/manifest.json')), true, 'manifest untouched');
     const manifest = await readManifest(dir);
     assert.equal(manifest.version, '0.1.0', 'manifest intact');

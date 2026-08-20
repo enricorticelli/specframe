@@ -9,6 +9,7 @@ import {
   formatReviewTable,
   formatSectionDigest,
   openDecisionIds,
+  reviewToJSON,
 } from '../src/review.js';
 import { resolvePreset } from '../src/decisions/presets.js';
 import { plainTheme, stripAnsi, visibleWidth } from '../src/style.js';
@@ -78,6 +79,25 @@ test('the open ids are exactly the undecided rows', () => {
   );
 });
 
+// --- dismissed decisions -----------------------------------------------------
+
+const DISMISSED = { tdd: { date: '2026-01-01', reason: 'no code here yet' } };
+
+test('a dismissed decision is a row, but neither decided nor open', () => {
+  const review = buildReview({}, { dismissed: DISMISSED });
+  const row = review.rows.find((r) => r.decision.id === 'tdd');
+  assert.equal(row.status, 'dismissed');
+  assert.equal(row.reason, 'no code here yet');
+  assert.equal(row.dismissedOn, '2026-01-01');
+  assert.equal(review.dismissed, 1);
+  assert.equal(review.open, review.total - 1 - review.decided);
+});
+
+test('openDecisionIds excludes dismissed decisions, so decide never re-asks them', () => {
+  const review = buildReview({}, { dismissed: DISMISSED });
+  assert.ok(!openDecisionIds(review).includes('tdd'));
+});
+
 // --- rendering --------------------------------------------------------------
 
 test('the table lists sections, choices and the ADR each one produces', () => {
@@ -126,6 +146,40 @@ test('the digest has one row per section plus a total', () => {
   for (const entry of review.groups) assert.ok(rendered.includes(entry.group.title));
   assert.match(rendered, /Total/);
   assert.match(rendered, new RegExp(`${review.decided}/${review.total}`));
+});
+
+test('a dismissed decision reads as "does not apply", with its own legend line', () => {
+  const rendered = stripAnsi(formatReviewTable(buildReview({}, { dismissed: DISMISSED }), { theme: plainTheme, width: 100 }));
+  assert.match(rendered, /does not apply/);
+  assert.match(rendered, /does not apply = dismissed/);
+});
+
+test('the open-only filter hides dismissed decisions too', () => {
+  const rendered = stripAnsi(
+    formatReviewTable(buildReview({}, { dismissed: DISMISSED }), { theme: plainTheme, width: 100, openOnly: true }),
+  );
+  assert.ok(!rendered.includes('no code here yet'));
+});
+
+test('the digest excludes dismissed decisions from the denominator, so the bar can reach 100%', () => {
+  // Answer one decision and dismiss every other row this configuration leaves
+  // open — a stand-in for a backend-only repo where the rest will never apply.
+  const answers = { 'architecture-style': 'modular-monolith' };
+  const before = buildReview(answers);
+  assert.ok(before.open > 0, 'the premise: something is actually left open to dismiss');
+  const dismissed = Object.fromEntries(
+    before.rows.filter((r) => r.status === 'open').map((r) => [r.decision.id, { date: '2026-01-01', reason: 'n/a' }]),
+  );
+  const review = buildReview(answers, { dismissed });
+
+  assert.equal(review.open, 0);
+  assert.equal(review.decided + review.dismissed, review.total);
+
+  const rendered = stripAnsi(formatSectionDigest(review, { theme: plainTheme, width: 80 }));
+  const totalLine = rendered.split('\n').find((line) => line.includes('Total'));
+  assert.match(totalLine, new RegExp(`${review.decided}/${review.decided}\\b`), 'denominator excludes dismissals');
+  assert.doesNotMatch(totalLine, /\./, 'the bar is fully filled, not stuck short of 100%');
+  assert.match(rendered, /dismissed as not applicable/);
 });
 
 // --- the revision diff ------------------------------------------------------
@@ -189,4 +243,52 @@ test('a review of nothing renders a sentence, not an empty frame', () => {
   assert.equal(complete.open, 0);
   const rendered = stripAnsi(formatReviewTable(complete, { theme: plainTheme, width: 80, openOnly: true }));
   assert.match(rendered, /Nothing left open/);
+});
+
+// --- machine-readable projection, for `specframe review --json` ------------
+
+test('reviewToJSON counts match the review and every row survives the trip', () => {
+  const review = buildReview({ 'architecture-style': 'microservices' });
+  const json = reviewToJSON(review);
+
+  assert.deepEqual(json.counts, {
+    total: review.total,
+    decided: review.decided,
+    open: review.open,
+    dismissed: review.dismissed,
+  });
+  assert.equal(json.decisions.length, review.total);
+
+  const decided = json.decisions.find((d) => d.id === 'architecture-style');
+  assert.equal(decided.status, 'decided');
+  assert.equal(decided.value, 'microservices');
+  assert.equal(decided.adrPath, `docs/adr/${decided.adr}-architecture-style.md`);
+
+  const stillOpen = json.decisions.find((d) => d.status === 'open');
+  assert.equal(stillOpen.value, null);
+  assert.equal(stillOpen.adrPath, null);
+});
+
+test('reviewToJSON round-trips through JSON.stringify with no undefined holes', () => {
+  const review = buildReview(balanced);
+  const roundTripped = JSON.parse(JSON.stringify(reviewToJSON(review)));
+  assert.equal(roundTripped.decisions.length, review.total);
+});
+
+test('reviewToJSON carries the dismissal reason and date, null everywhere else', () => {
+  const review = buildReview({ 'architecture-style': 'microservices' }, { dismissed: DISMISSED });
+  const json = reviewToJSON(review);
+
+  const dismissed = json.decisions.find((d) => d.id === 'tdd');
+  assert.equal(dismissed.status, 'dismissed');
+  assert.equal(dismissed.dismissedReason, 'no code here yet');
+  assert.equal(dismissed.dismissedOn, '2026-01-01');
+  assert.equal(dismissed.adrPath, null, 'a dismissal produces no ADR');
+
+  const decided = json.decisions.find((d) => d.id === 'architecture-style');
+  assert.equal(decided.dismissedReason, null);
+  assert.equal(decided.dismissedOn, null);
+
+  // Not to be confused with the pre-existing gate-retirement channel.
+  assert.deepEqual(json.notApplicable, []);
 });

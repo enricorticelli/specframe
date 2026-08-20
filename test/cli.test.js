@@ -9,9 +9,22 @@ test('the default command is init', () => {
 });
 
 test('commands are recognised', () => {
-  for (const command of ['init', 'decide', 'update', 'uninstall', 'help']) {
+  for (const command of ['init', 'decide', 'update', 'uninstall', 'help', 'dismiss', 'restore']) {
     assert.equal(parseArgs([command]).command, command);
   }
+});
+
+test('dismiss and restore take their id(s) as the command subject', () => {
+  assert.equal(parseArgs(['dismiss', 'rendering-strategy']).flags.target, 'rendering-strategy');
+  assert.equal(parseArgs(['dismiss', 'a,b,c']).flags.target, 'a,b,c');
+  assert.equal(parseArgs(['restore', 'rendering-strategy']).flags.target, 'rendering-strategy');
+});
+
+test('--reason and --group accept both --flag value and --flag=value', () => {
+  assert.equal(parseArgs(['dismiss', 'tdd', '--reason', 'no code yet']).flags.reason, 'no code yet');
+  assert.equal(parseArgs(['dismiss', 'tdd', '--reason=no code yet']).flags.reason, 'no code yet');
+  assert.equal(parseArgs(['dismiss', '--group', 'frontend']).flags.group, 'frontend');
+  assert.equal(parseArgs(['dismiss', '--group=frontend']).flags.group, 'frontend');
 });
 
 test('boolean flags parse in short and long form', () => {
@@ -67,4 +80,28 @@ test('a second bare argument is the command subject, and a third cannot override
     'tdd',
     'a flag in between does not consume it',
   );
+});
+
+test('--json is a plain boolean flag', () => {
+  assert.equal(parseArgs(['review']).flags.json, false);
+  assert.equal(parseArgs(['review', '--json']).flags.json, true);
+  assert.equal(parseArgs(['explain', 'tdd', '--json']).flags.json, true);
+});
+
+test('--title accepts both --flag value and --flag=value', () => {
+  assert.equal(parseArgs(['adr', 'new', 'x', '--title', 'My title']).flags.title, 'My title');
+  assert.equal(parseArgs(['adr', 'new', 'x', '--title=My title']).flags.title, 'My title');
+});
+
+test('explain takes its decision id as the command subject', () => {
+  assert.equal(parseArgs(['explain', 'architecture-style']).command, 'explain');
+  assert.equal(parseArgs(['explain', 'architecture-style']).flags.target, 'architecture-style');
+});
+
+test('`adr new <slug>` fills target and target2 in order', () => {
+  const { command, flags } = parseArgs(['adr', 'new', 'payments-provider', '--title', 'Payment provider']);
+  assert.equal(command, 'adr');
+  assert.equal(flags.target, 'new');
+  assert.equal(flags.target2, 'payments-provider');
+  assert.equal(flags.title, 'Payment provider');
 });

@@ -62,7 +62,7 @@ test('amazonq target emits a managed plain-markdown rule', async () => {
 
 test('triad and rules targets coexist in one plan', async () => {
   const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: ['claude', 'gemini'] });
-  assert.ok(entryFor(plan, '.claude/agents/explorer.md'), 'claude triad present');
+  assert.ok(entryFor(plan, '.claude/agents/bootstrapper.md'), 'claude triad present');
   assert.ok(entryFor(plan, 'GEMINI.md'), 'gemini rules present');
 });
 

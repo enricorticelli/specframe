@@ -19,6 +19,16 @@ open. Recording one by hand works the same way —
 `specframe decide --set <id>=<value> --detected` marks the ADR as documenting an
 existing implementation rather than a new choice.
 
+**Will never apply here?** Not every decision belongs to every repository —
+every frontend decision in a backend-only service, event sourcing in a plain
+CRUD app. Where a gate question has a `none`-shaped option (`persistence: none`,
+`ui-surface: none`), answer that instead: it retires the whole group at once
+and produces a real ADR. For the cases no gate covers, dismiss the decision
+directly: `specframe dismiss <id>` — optionally `--reason "..."`, and
+`--group <name>` for a whole section in one call. A dismissal is a claim about
+this repository's *shape*, not a way to clear the backlog: it leaves no ADR,
+only the record below, and `specframe restore <id>` reopens it if that changes.
+
 ## Decisions taken
 
 {{takenDecisions}}
@@ -26,6 +36,10 @@ existing implementation rather than a new choice.
 ## Open decisions
 
 {{openDecisions}}
+
+## Decisions that do not apply
+
+{{dismissedDecisions}}
 
 ---
 

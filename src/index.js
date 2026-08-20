@@ -10,18 +10,22 @@ import {
   validateAnswers,
 } from './answers.js';
 import { BLUEPRINTS, BLUEPRINT_IDS } from './decisions/blueprints.js';
-import { getDecision, isRelevant } from './decisions/catalog.js';
+import { GROUPS, decisionsForGroup, getDecision, isRelevant } from './decisions/catalog.js';
+import { explainDecision } from './decisions/explain.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
 import { askQuestions, askRevision, parseAgentTargets, renderReview } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
-import { diffAnswers } from './review.js';
+import { buildReview, diffAnswers, reviewToJSON } from './review.js';
 import { configureTheme, terminalWidth, theme, wrapText } from './style.js';
+import { createReadlineIo } from './tui.js';
 import {
   decideTemplateSet,
+  findExistingRootFiles,
   normalizeConfig,
   planRevisionEffects,
+  recordLocalAdr,
   reviseTemplateSet,
   today,
   uninstallTemplateSet,
@@ -46,6 +50,9 @@ const VALUE_FLAGS = new Set([
   '--name',
   '--pm',
   '--agents',
+  '--title',
+  '--reason',
+  '--group',
 ]);
 
 export function parseArgs(argv) {
@@ -58,6 +65,7 @@ export function parseArgs(argv) {
     detected: false,
     noColor: false,
     open: false,
+    json: false,
   };
   let command = 'init';
   let commandSeen = false;
@@ -73,6 +81,7 @@ export function parseArgs(argv) {
     if (arg === '--detected') { flags.detected = true; continue; }
     if (arg === '--no-color' || arg === '--no-colour') { flags.noColor = true; continue; }
     if (arg === '--open') { flags.open = true; continue; }
+    if (arg === '--json') { flags.json = true; continue; }
 
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
@@ -95,10 +104,12 @@ export function parseArgs(argv) {
       continue;
     }
 
-    // A second bare argument is the command's subject — today only
-    // `revise <decision-id>`. Kept as the first one wins, so a stray third
+    // A second bare argument is the command's subject — `revise <decision-id>`,
+    // `explain <decision-id>`, or `adr <subcommand>`. A third is `adr new
+    // <slug>`'s slug. Kept as first-one-wins per slot, so a stray extra
     // argument cannot quietly redirect the command.
-    if (flags.target === undefined) flags.target = arg;
+    if (flags.target === undefined) { flags.target = arg; continue; }
+    if (flags.target2 === undefined) flags.target2 = arg;
   }
 
   return { command, flags };
@@ -121,7 +132,15 @@ Usage:
   specframe [init] [options]     Scaffold context files at the repo root.
   specframe decide [options]     Record decisions still open in this repo.
   specframe review [options]     Show the decisions recorded here, as a table.
+  specframe explain <id>         Show one decision's brief: question, context,
+                                  every option with its tradeoff.
+  specframe adr new <slug>       Record an ADR for a decision outside the
+                                  catalog — a project-specific choice.
   specframe revise [id]          Change a decision already recorded.
+  specframe dismiss <id>         Declare a decision can never apply here — every
+                                  frontend decision in a backend-only service,
+                                  say. Leaves the open backlog with no ADR.
+  specframe restore <id>         Undo a dismissal; the decision reopens.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -164,6 +183,10 @@ Init options:
                       instead of presenting the choice as new. Use this when
                       documenting an existing repository — /specframe-bootstrap
                       does it for you.
+  -f, --force         If specframe is already installed here, re-run onboarding
+                      from scratch instead of pointing at update/decide. Also
+                      answers yes to overwriting AGENTS.md/CLAUDE.md/etc. that
+                      already exist from outside specframe, unattended.
 
 Decide options:
   -n, --dry-run    Show what would be written.
@@ -172,6 +195,22 @@ Decide options:
 
 Review options:
       --open       Only the decisions still open.
+      --json       Machine-readable: counts plus one object per decision
+                   (status — decided, open or dismissed — value, ADR path,
+                   and the dismissal reason where there is one). What
+                   \`specframe-decide\` reads.
+
+Explain options:
+      --json       Machine-readable: question, context, and every option with
+                   its statement, consequences, tradeoff and what it emits.
+                   Works before init too — there is just no repo context yet.
+
+Adr options ('adr new <slug> --title "..."'):
+      --title      Required. The ADR's title.
+  -n, --dry-run    Show what would be written, without writing it.
+      --json       Print { number, slug, title, relpath } instead of a message.
+                   The number comes from a band (9000+) the catalog never
+                   allocates, so it can never collide with a future decision.
 
 Revise options:
       --set k=v,...  Revise without prompting, e.g.
@@ -184,6 +223,25 @@ used to be. Documents the new answer no longer implies are reported, never
 deleted. A document you edited by hand is kept, with the new version beside it
 as <file>.specframe-new; an index is refreshed in place instead, section by
 section.
+
+Dismiss options ('dismiss <id>[,<id>...]' or 'dismiss --group <name>'):
+      --reason "..."  Why this repository will never take it. Optional — an
+                      omitted reason renders as "not applicable to this
+                      repository" — but a stated one is worth more in six
+                      months, when nobody can tell a judgement from tidying.
+      --group <name>  Dismiss every open, relevant decision in one section at
+                      once, with the same reason — nine frontend decisions in
+                      one call for a backend-only service. Off a terminal,
+                      needs --yes.
+  -n, --dry-run       Show what would be written, without writing it.
+      --json          Print { dismissed, reason, files } instead of a message.
+Only applies to a decision still open — an already-decided one is changed with
+\`revise\` instead. No ADR is written; the record lives in docs/DECISIONS.md and
+the manifest only. \`specframe restore <id>\` undoes it.
+
+Restore options ('restore <id>[,<id>...]'):
+  -n, --dry-run       Show what would be written, without writing it.
+      --json          Print { restored, files } instead of a message.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -225,6 +283,17 @@ function currentDirName(cwd) {
   return parts[parts.length - 1] || 'current-repo';
 }
 
+// The wizard's `x` key records only a reason (see applyDecisionResult in
+// prompts.js) — dating it happens once, here, when the run's config is
+// finalized, exactly like every ADR this same run produces shares one
+// `initDate` rather than a per-keystroke timestamp. `?? date` makes this safe
+// to call on a dismissal that already carries one (from a previous run).
+function stampDismissed(dismissed, date) {
+  return Object.fromEntries(
+    Object.entries(dismissed).map(([id, entry]) => [id, { date: entry.date ?? date, reason: entry.reason ?? null }]),
+  );
+}
+
 function logPlanSummary(resolved) {
   const s = summarize(resolved);
   console.log(
@@ -238,8 +307,67 @@ function logPlanSummary(resolved) {
   );
 }
 
+// `init` on a repo specframe already scaffolded used to re-run the whole wizard
+// from scratch and then quietly skip every file that already existed — correct
+// per file, but the run as a whole looked like onboarding into an empty repo
+// when it was really redundant with `update`/`decide`. Caught here, before any
+// question is asked, so a re-run points at the command that actually applies.
+function reportAlreadyInstalled(manifest) {
+  const stored = normalizeConfig(manifest.config);
+  console.log(
+    `${theme.warn('specframe is already installed here')} ` +
+      theme.muted(`(v${manifest.version ?? 'unknown'}, mode ${stored.mode}).`),
+  );
+  console.log(theme.muted('  `specframe update`  refreshes generated files for this version.'));
+  console.log(theme.muted('  `specframe decide`  records decisions still open.'));
+  console.log(theme.muted('  `specframe review`  shows what is recorded here.'));
+  console.log(theme.muted('\nRun `specframe init --force` to re-run onboarding from scratch anyway.'));
+}
+
+// AGENTS.md/CLAUDE.md/etc. that already exist here, from outside specframe —
+// most often a legacy project with its own AI-agent context files. `init` never
+// overwrites a file it did not create, so left unquestioned these are silently
+// skipped and specframe's pointers (docs/, ADRs, rules) end up unreachable from
+// whichever file an agent actually reads. Ask once, before the wizard runs,
+// rather than let that go by as a quiet `[skip]` line mid-run.
+async function confirmLegacyOverwrite({ targetDir, flags, unattended }) {
+  const found = await findExistingRootFiles(targetDir);
+  if (found.length === 0) return new Set();
+
+  const list = found.join(', ');
+  const plural = found.length === 1 ? 'it' : 'them';
+
+  if (unattended) {
+    if (flags.force) {
+      console.log(theme.warn(`\n--force: overwriting existing ${list}.`));
+      return new Set(found);
+    }
+    console.warn(theme.warn(`\nFound existing ${list} — kept as-is (specframe never overwrites a file it did not create).`));
+    console.warn(theme.muted(`Pass --force to overwrite ${plural} with specframe's templates instead.\n`));
+    return new Set();
+  }
+
+  console.log(`\n${theme.warn('Found file(s) specframe would normally create:')} ${theme.bold(list)}`);
+  console.log(
+    theme.muted(
+      '  Kept as-is by default. Overwriting replaces the content with specframe\'s\n' +
+        '  template — anything already written there is lost.',
+    ),
+  );
+  const io = createReadlineIo();
+  const raw = await io.question(`${theme.accent(theme.glyph.prompt)} Overwrite ${plural}? [y/N] `);
+  io.close();
+  return ['y', 'yes'].includes(raw.trim().toLowerCase()) ? new Set(found) : new Set();
+}
+
 async function runInit(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
+
+  const existingManifest = await readManifest(targetDir);
+  if (existingManifest?.config && !flags.force) {
+    reportAlreadyInstalled(existingManifest);
+    return;
+  }
 
   const sources = await collectAnswerSources({
     preset: flags.preset,
@@ -276,6 +404,8 @@ async function runInit(cwd, version, flags) {
         'Pass --mode blank for the template set, or --preset/--blueprint/--set/--yes to configure it.',
     );
   }
+
+  const overwrite = await confirmLegacyOverwrite({ targetDir, flags, unattended });
 
   let config;
   if (unattended) {
@@ -323,11 +453,13 @@ async function runInit(cwd, version, flags) {
   const provenance = flags.detected
     ? Object.fromEntries(Object.keys(config.decisions ?? {}).map((id) => [id, 'detected']))
     : {};
-  const full = { ...config, provenance, initDate: today() };
-  logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions }));
+  const initDate = today();
+  const dismissed = stampDismissed(config.dismissed ?? {}, initDate);
+  const full = { ...config, provenance, dismissed, initDate };
+  logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions, dismissed: full.dismissed }));
   console.log('');
 
-  await writeTemplateSet({ targetDir, ...full, version });
+  await writeTemplateSet({ targetDir, ...full, version, overwrite });
   console.log(`\n${theme.good('Done.')} Context files are ready in: ${theme.bold(targetDir)}`);
   console.log(theme.muted(`Run \`specframe review\` to see the decisions recorded here as a table.`));
   if (full.mode === 'blank') {
@@ -351,7 +483,7 @@ async function runDecide(cwd, version, flags) {
   }
 
   const stored = normalizeConfig(manifest.config);
-  const resolvedBefore = resolveDecisions({ mode: 'guided', answers: stored.decisions });
+  const resolvedBefore = resolveDecisions({ mode: 'guided', answers: stored.decisions, dismissed: stored.dismissed });
   const openIds = resolvedBefore.open.map((o) => o.decision.id);
 
   if (openIds.length === 0) {
@@ -369,21 +501,31 @@ async function runDecide(cwd, version, flags) {
   reportInvalidAnswers(invalid);
 
   // A non-interactive source may only answer decisions that are still open;
-  // silently rewriting a recorded decision would contradict its ADR.
-  const alreadyDecided = Object.keys(valid).filter((id) => !openIds.includes(id));
+  // silently rewriting a recorded decision would contradict its ADR, and one
+  // that was dismissed needs `specframe restore` first, not a quiet answer.
+  const alreadyDecided = Object.keys(valid).filter((id) => stored.decisions[id] !== undefined);
   if (alreadyDecided.length > 0) {
     console.warn(
       `\nIgnoring decisions already recorded: ${alreadyDecided.join(', ')}\n` +
         'Supersede them by editing their ADR instead.\n',
     );
   }
+  for (const id of Object.keys(valid)) {
+    const dismissal = stored.dismissed[id];
+    if (!dismissal) continue;
+    console.warn(
+      theme.warn(`\nIgnoring ${id}: dismissed on ${dismissal.date}${dismissal.reason ? ` — ${dismissal.reason}` : ''}.`),
+    );
+    console.warn(theme.muted(`Run \`specframe restore ${id}\` first if that is no longer true.\n`));
+  }
   const fresh = Object.fromEntries(Object.entries(valid).filter(([id]) => openIds.includes(id)));
 
   let decisions;
+  let dismissed = stored.dismissed;
   const unattended = flags.yes || !process.stdin.isTTY;
   if (unattended) {
     decisions = flags.yes
-      ? applyRecommendedDefaults({ ...stored.decisions, ...fresh }, { only: openIds })
+      ? applyRecommendedDefaults({ ...stored.decisions, ...fresh }, { only: openIds, dismissed: stored.dismissed })
       : { ...stored.decisions, ...fresh };
     if (Object.keys(fresh).length === 0 && !flags.yes) {
       throw new Error(
@@ -407,10 +549,15 @@ async function runDecide(cwd, version, flags) {
       return;
     }
     decisions = answered.decisions;
+    dismissed = stampDismissed(answered.dismissed ?? {}, today());
   }
 
   const newlyDecided = Object.keys(decisions).filter((id) => stored.decisions[id] === undefined);
-  if (newlyDecided.length === 0) {
+  // Dismissing something is also recording something, even when no option was
+  // chosen — a wizard session that only pressed `x` a few times must not be
+  // discarded as if nothing happened.
+  const newlyDismissed = Object.keys(dismissed).filter((id) => stored.dismissed[id] === undefined);
+  if (newlyDecided.length === 0 && newlyDismissed.length === 0) {
     console.log(theme.muted('\nNo new decisions were recorded. Nothing was written.'));
     return;
   }
@@ -422,13 +569,42 @@ async function runDecide(cwd, version, flags) {
     for (const id of newlyDecided) provenance[id] = 'detected';
   }
 
-  const config = { ...stored, mode: 'guided', decisions, provenance };
+  const config = { ...stored, mode: 'guided', decisions, dismissed, provenance };
+
+  // `--dry-run --json` is the preview `specframe-decide` shows before writing
+  // anything: the plan as data, not console lines meant for a terminal.
+  if (flags.json) {
+    const actions = await decideTemplateSet({
+      targetDir,
+      ...config,
+      version,
+      dryRun: flags.dryRun,
+      quiet: true,
+    });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          recorded: newlyDecided,
+          dismissed: newlyDismissed,
+          files: actions
+            .filter((a) => a.action !== 'up-to-date')
+            .map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   console.log('');
   await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
-  logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));
-  console.log(
-    flags.dryRun ? '\nDry run complete. Nothing was written.' : `\nRecorded ${newlyDecided.length} decisions.`,
-  );
+  logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions, dismissed }));
+  const parts = [];
+  if (newlyDecided.length > 0) parts.push(`Recorded ${newlyDecided.length} decision${newlyDecided.length === 1 ? '' : 's'}`);
+  if (newlyDismissed.length > 0) parts.push(`dismissed ${newlyDismissed.length}`);
+  console.log(flags.dryRun ? '\nDry run complete. Nothing was written.' : `\n${parts.join(', ')}.`);
 }
 
 // Read back what this repository has decided, as the same table the wizard
@@ -445,6 +621,13 @@ async function runReview(cwd, flags) {
   }
 
   const stored = normalizeConfig(manifest.config);
+
+  if (flags.json) {
+    const review = buildReview(stored.decisions ?? {}, { dismissed: stored.dismissed ?? {} });
+    console.log(JSON.stringify({ version: manifest.version ?? null, ...reviewToJSON(review) }, null, 2));
+    return;
+  }
+
   const width = terminalWidth();
 
   console.log('');
@@ -456,15 +639,128 @@ async function runReview(cwd, flags) {
     ),
   );
   console.log('');
-  console.log(renderReview(stored.decisions ?? {}, { width, openOnly: flags.open }));
+  console.log(renderReview(stored.decisions ?? {}, { width, openOnly: flags.open, dismissed: stored.dismissed ?? {} }));
   console.log('');
 
-  const open = summarize(resolveDecisions({ mode: 'guided', answers: stored.decisions ?? {} })).open;
+  const s = summarize(
+    resolveDecisions({ mode: 'guided', answers: stored.decisions ?? {}, dismissed: stored.dismissed ?? {} }),
+  );
   console.log(
     theme.muted(
-      open > 0
+      s.open > 0
         ? '  `specframe decide` records the open ones.'
-        : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
+        : s.dismissed > 0
+          ? '  Every applicable decision is recorded; the rest were dismissed as not applicable.'
+          : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
+    ),
+  );
+}
+
+// The decision brief — the `?` the interactive wizard shows for one question,
+// available without a terminal. Works even without a manifest (a fresh
+// directory, before `init`): there is simply no repository context to fold in,
+// so the decision shows as open and always relevant. This is what
+// `specframe-decide` reads before proposing anything, and what a human can run
+// on its own to see the alternatives a given decision weighs.
+async function runExplain(cwd, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const id = flags.target;
+  if (!id) {
+    throw new Error('Usage: specframe explain <decision-id> [--json]\n\nRun `specframe review` to see decision ids.');
+  }
+
+  const manifest = await readManifest(targetDir);
+  const stored = manifest?.config ? normalizeConfig(manifest.config) : null;
+  const explanation = explainDecision(id, {
+    answers: stored?.decisions ?? {},
+    provenance: stored?.provenance ?? {},
+  });
+  if (!explanation) {
+    throw new Error(
+      `Unknown decision: ${id}\nRun \`specframe review\` to see the decisions this repository records.`,
+    );
+  }
+
+  if (flags.json) {
+    console.log(JSON.stringify(explanation, null, 2));
+    return;
+  }
+
+  console.log(formatExplanation(explanation));
+}
+
+function formatExplanation(exp) {
+  const lines = [];
+  lines.push(`${theme.bold(exp.title)} ${theme.muted(`(ADR-${exp.adr})`)}`, '');
+  lines.push(exp.question, '');
+  lines.push(theme.muted(exp.help), '');
+  lines.push(exp.context, '');
+
+  if (exp.status === 'decided') {
+    lines.push(
+      `${theme.good('Current:')} ${exp.current}` +
+        (exp.provenance === 'detected' ? theme.muted(' (detected, not chosen)') : ''),
+    );
+  } else {
+    lines.push(theme.warn('Not yet decided.'));
+  }
+  if (!exp.relevant) lines.push(theme.muted('Not currently relevant to this configuration.'));
+  lines.push('');
+
+  for (const option of exp.options) {
+    const marker = option.recommended ? theme.good(' ★ recommended') : '';
+    lines.push(`${theme.bold(option.label)}${marker}` + (option.hint ? theme.muted(`  — ${option.hint}`) : ''));
+    lines.push(`  ${option.statement}`);
+    for (const consequence of option.consequences) lines.push(`  - ${consequence}`);
+    lines.push(theme.muted(`  Tradeoff: ${option.tradeoff}`));
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+// Record an ADR for a decision the catalog does not ask about — the CLI half
+// of the `specframe-record` skill. See writer.js's recordLocalAdr: the number
+// comes from the local band the catalog promises never to use, derived from
+// disk so it can never collide with what a future catalog adds.
+async function runAdrNew(cwd, version, flags) {
+  if (flags.target !== 'new') {
+    throw new Error(
+      `Unknown \`adr\` subcommand: ${flags.target ?? '(none)'}\n\n` +
+        'Usage: specframe adr new <slug> --title "..."',
+    );
+  }
+  const slug = flags.target2;
+  if (!slug || !/^[a-z0-9-]+$/.test(slug)) {
+    throw new Error('Usage: specframe adr new <slug> --title "..."\n\n<slug> must be lowercase, digits and hyphens.');
+  }
+  if (!flags.title) {
+    throw new Error('Usage: specframe adr new <slug> --title "..."\n\n--title is required.');
+  }
+
+  const targetDir = await resolveTargetDir(cwd);
+  const result = await recordLocalAdr({
+    targetDir,
+    version,
+    slug,
+    title: flags.title,
+    date: today(),
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`${theme.good('[write]')} ${result.relpath}`);
+  console.log(theme.muted(`ADR-${result.number}: ${result.title}`));
+  console.log(
+    theme.muted(
+      flags.dryRun
+        ? '\nDry run complete. Nothing was written.'
+        : '\nFill in Context, Decision, Consequences and Alternatives, then set its Status.',
     ),
   );
 }
@@ -510,6 +806,18 @@ async function runRevise(cwd, version, flags) {
   if (flags.set) {
     const { valid, invalid } = validateAnswers(parseSetFlag(flags.set));
     reportInvalidAnswers(invalid);
+    // A dismissed decision is not "recorded" in the ordinary sense, but --set
+    // silently answering it would bypass `specframe restore` just the same —
+    // the whole point of a dismissal is that nothing decides it quietly.
+    for (const id of Object.keys(valid)) {
+      const dismissal = stored.dismissed[id];
+      if (!dismissal) continue;
+      console.warn(
+        theme.warn(`\nIgnoring ${id}: dismissed on ${dismissal.date}${dismissal.reason ? ` — ${dismissal.reason}` : ''}.`),
+      );
+      console.warn(theme.muted(`Run \`specframe restore ${id}\` first if that is no longer true.\n`));
+      delete valid[id];
+    }
     if (Object.keys(valid).length === 0) {
       throw new Error('--set named no decision this catalog knows. Nothing to revise.');
     }
@@ -571,8 +879,18 @@ async function runRevise(cwd, version, flags) {
   }
 
   const config = { ...stored, mode: 'guided', decisions, revisions };
-  const before = resolveDecisions({ mode: 'guided', answers: stored.decisions, provenance: stored.provenance });
-  const after = resolveDecisions({ mode: 'guided', answers: decisions, provenance: stored.provenance });
+  const before = resolveDecisions({
+    mode: 'guided',
+    answers: stored.decisions,
+    provenance: stored.provenance,
+    dismissed: stored.dismissed,
+  });
+  const after = resolveDecisions({
+    mode: 'guided',
+    answers: decisions,
+    provenance: stored.provenance,
+    dismissed: stored.dismissed,
+  });
   const effects = planRevisionEffects({ before, after });
 
   console.log('');
@@ -627,6 +945,193 @@ async function runRevise(cwd, version, flags) {
   );
 }
 
+function dismissWarning(id, entry) {
+  return (
+    theme.warn(`\n${id} is already recorded, in docs/adr/${entry.adr}-${entry.slug}.md.`) +
+    theme.muted('\nChange it with `specframe revise` instead — dismiss only applies to an open decision.')
+  );
+}
+
+/**
+ * Declare that a decision can never apply to this repository — every frontend
+ * decision in a backend-only service, say.
+ *
+ * Deliberately narrow: only a decision still *open* may be dismissed (an
+ * already-decided one is changed with `specframe revise` instead, which keeps
+ * the accepted ADR the single source of truth for what was chosen), and a
+ * gated-off decision is refused with the same wording `revise` already uses
+ * for the same situation. No ADR is written — see docs/DECISIONS.md's own
+ * explanation of why — so this reuses `decideTemplateSet` exactly as it is:
+ * new documents created, nothing existing touched, and the regenerable
+ * indexes (chiefly docs/DECISIONS.md) refreshed.
+ */
+async function runDismiss(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `dismiss` extends an existing scaffold.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+
+  let ids;
+  if (flags.group) {
+    if (!GROUPS.some((g) => g.id === flags.group)) {
+      throw new Error(`Unknown group: ${flags.group}\nGroups: ${GROUPS.map((g) => g.id).join(', ')}`);
+    }
+    ids = decisionsForGroup(flags.group)
+      .filter((d) => isRelevant(d, stored.decisions))
+      .filter((d) => stored.decisions[d.id] === undefined && stored.dismissed[d.id] === undefined)
+      .map((d) => d.id);
+    if (ids.length === 0) {
+      console.log(`Nothing to dismiss in "${flags.group}" — every decision there is already recorded or dismissed.`);
+      return;
+    }
+    // The high-blast-radius form — several decisions dismissed at once with
+    // one shared reason — needs the same explicit confirmation off a terminal
+    // that `init --yes`/`decide --yes` already require for an unreviewed,
+    // catalog-wide action.
+    if (!process.stdin.isTTY && !flags.yes) {
+      throw new Error(
+        `--group would dismiss ${ids.length} decisions at once: ${ids.join(', ')}.\n` +
+          'Pass --yes to confirm off a terminal.',
+      );
+    }
+  } else {
+    ids = (flags.target ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) {
+      throw new Error(
+        'Usage: specframe dismiss <id>[,<id>...] [--reason "..."]\n\n' +
+          'Or:    specframe dismiss --group <name> [--reason "..."]',
+      );
+    }
+  }
+
+  // Validated before anything is written, so a typo partway through a
+  // multi-id list cannot half-apply.
+  for (const id of ids) {
+    const decision = getDecision(id);
+    if (!decision) {
+      throw new Error(
+        `Unknown decision: ${id}\nRun \`specframe review\` to see the decisions this repository records.`,
+      );
+    }
+    if (stored.decisions[id] !== undefined) throw new Error(dismissWarning(id, decision));
+    if (!isRelevant(decision, stored.decisions)) {
+      throw new Error(
+        `${id} does not apply to this configuration — an earlier answer already retires it.\n` +
+          'Revise that answer first if you want to record something about it.',
+      );
+    }
+  }
+
+  const date = today();
+  const reason = flags.reason?.trim() || null;
+  const dismissed = { ...stored.dismissed };
+  for (const id of ids) dismissed[id] = { date, reason };
+
+  // Never flips `mode` — dismissing is not the same act as recording a
+  // decision, and a blank-mode repo dismissing its way through the frontend
+  // group should not suddenly gain the guided-mode worked examples it never
+  // asked for.
+  const config = { ...stored, dismissed };
+
+  if (flags.json) {
+    const actions = await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun, quiet: true });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          dismissed: ids,
+          reason,
+          files: actions.filter((a) => a.action !== 'up-to-date').map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log('');
+  await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+  console.log(
+    flags.dryRun
+      ? '\nDry run complete. Nothing was written.'
+      : `\n${theme.good(`Dismissed ${ids.length} decision${ids.length === 1 ? '' : 's'}.`)} ` +
+          theme.muted('No ADR was written — see docs/DECISIONS.md. `specframe restore <id>` reopens it.'),
+  );
+}
+
+/**
+ * Undo a dismissal: the decision returns to the open backlog, exactly as if
+ * it had never been dismissed. Reuses `decideTemplateSet` the same way
+ * `runDismiss` does — restoring writes nothing new, it only refreshes the
+ * regenerable indexes so the decision moves back to `## Open decisions`.
+ */
+async function runRestore(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `restore` reopens a decision it dismissed.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  const ids = (flags.target ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (ids.length === 0) {
+    throw new Error('Usage: specframe restore <id>[,<id>...]');
+  }
+
+  const notDismissed = ids.filter((id) => stored.dismissed[id] === undefined);
+  if (notDismissed.length > 0) {
+    throw new Error(
+      `Not dismissed, so nothing to restore: ${notDismissed.join(', ')}\n` +
+        'Run `specframe review` to see the decisions this repository records.',
+    );
+  }
+
+  const dismissed = { ...stored.dismissed };
+  for (const id of ids) delete dismissed[id];
+  const config = { ...stored, dismissed };
+
+  if (flags.json) {
+    const actions = await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun, quiet: true });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          restored: ids,
+          files: actions.filter((a) => a.action !== 'up-to-date').map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log('');
+  await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+  console.log(
+    flags.dryRun
+      ? '\nDry run complete. Nothing was written.'
+      : `\n${theme.good(`Restored ${ids.length} decision${ids.length === 1 ? '' : 's'}.`)} ` +
+          theme.muted('Back in the open backlog — see docs/DECISIONS.md, or `specframe decide` to record it.'),
+  );
+}
+
 async function runUpdate(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
   const manifest = await readManifest(targetDir);
@@ -657,7 +1162,8 @@ async function runUpdate(cwd, version, flags) {
       console.log('\nCancelled. Nothing was written.');
       return;
     }
-    config = { ...answers, initDate: today() };
+    const initDate = today();
+    config = { ...answers, dismissed: stampDismissed(answers.dismissed ?? {}, initDate), initDate };
   }
 
   await updateTemplateSet({
@@ -672,7 +1178,7 @@ async function runUpdate(cwd, version, flags) {
   // not re-prompted: they surface in docs/DECISIONS.md, and `specframe decide`
   // is how you answer them.
   if (config.mode === 'guided') {
-    const resolved = resolveDecisions({ mode: 'guided', answers: config.decisions });
+    const resolved = resolveDecisions({ mode: 'guided', answers: config.decisions, dismissed: config.dismissed });
     const newOpen = resolved.open.filter((o) => isRelevant(o.decision, config.decisions));
     if (newOpen.length > 0) {
       console.log(
@@ -700,7 +1206,9 @@ async function resolveTargetDir(cwd) {
   const root = await findRepoRoot(cwd);
   if (root) {
     if (root !== path.resolve(cwd)) {
-      console.log(`Operating on repository root: ${root}`);
+      // Informational, not the command's output — stderr, so `--json` callers
+      // piping stdout into a parser never see it mixed in.
+      console.error(`Operating on repository root: ${root}`);
     }
     return root;
   }
@@ -738,8 +1246,28 @@ export async function run(argv = process.argv.slice(2)) {
     return;
   }
 
+  if (command === 'explain') {
+    await runExplain(cwd, flags);
+    return;
+  }
+
+  if (command === 'adr') {
+    await runAdrNew(cwd, version, flags);
+    return;
+  }
+
   if (command === 'revise') {
     await runRevise(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'dismiss') {
+    await runDismiss(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'restore') {
+    await runRestore(cwd, version, flags);
     return;
   }
 

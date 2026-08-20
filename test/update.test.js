@@ -97,9 +97,22 @@ test('treats a managed file with no manifest baseline as a conflict', () => {
   assert.equal(actionFor(actions, 'agent.md').action, 'conflict');
 });
 
-test('reports managed manifest entries missing from the plan as orphans', () => {
+test('a managed file the plan no longer produces is removed, untouched since specframe wrote it', () => {
   const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
-  const diskHashes = { 'a.md': sha256('x') };
+  const diskHashes = { 'a.md': sha256('x'), 'removed-agent.md': sha256('gone') };
+  const manifest = manifestOf({
+    'a.md': { content: 'x', managed: true },
+    'removed-agent.md': { content: 'gone', managed: true },
+  });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'removed-agent.md').action, 'orphan-remove');
+});
+
+test('a managed file the plan no longer produces is only reported when it was edited by hand', () => {
+  const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
+  const diskHashes = { 'a.md': sha256('x'), 'removed-agent.md': sha256('my own edits') };
   const manifest = manifestOf({
     'a.md': { content: 'x', managed: true },
     'removed-agent.md': { content: 'gone', managed: true },
@@ -108,6 +121,19 @@ test('reports managed manifest entries missing from the plan as orphans', () => 
   const actions = planUpdateActions({ plan, manifest, diskHashes });
 
   assert.equal(actionFor(actions, 'removed-agent.md').action, 'orphan');
+});
+
+test('a managed orphan already gone from disk is neither removed nor reported', () => {
+  const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
+  const diskHashes = { 'a.md': sha256('x') }; // no entry for removed-agent.md — already deleted
+  const manifest = manifestOf({
+    'a.md': { content: 'x', managed: true },
+    'removed-agent.md': { content: 'gone', managed: true },
+  });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'removed-agent.md'), undefined);
 });
 
 test('does not report user-owned manifest entries as orphans', () => {
@@ -197,6 +223,49 @@ test('an index with no recognisable section still falls back to a sibling', () =
   });
 
   assert.equal(actionFor(actions, 'docs/rules/README.md').action, 'conflict');
+});
+
+test('a heading new to this version is inserted after the section that merged before it', () => {
+  // The real scenario a version upgrade produces: an existing file has every
+  // heading the version that wrote it knew about, but not the new one this
+  // version adds. It must not be treated as a restructure.
+  const BACKLOG = ['## Decisions taken', '## Open decisions', '## Decisions that do not apply'];
+  const disk =
+    '# Decisions\n\n## Decisions taken\n\nmine\n\n## Open decisions\n\nalso mine\n\n---\n\nfooter\n';
+  const planned =
+    '# Decisions\n\n## Decisions taken\n\ntheirs\n\n## Open decisions\n\nalso theirs\n\n' +
+    '## Decisions that do not apply\n\nnew section\n\n---\n\nfooter\n';
+
+  const merged = mergeGeneratedSections(disk, planned, BACKLOG);
+
+  assert.match(merged, /## Decisions taken\n\ntheirs/, 'existing sections still refresh');
+  assert.match(merged, /## Open decisions\n\nalso theirs/);
+  assert.match(
+    merged,
+    /## Open decisions\n\nalso theirs\n\n## Decisions that do not apply\n\nnew section\n\n---/,
+    'the new section lands right after the one before it, ahead of the footer',
+  );
+});
+
+test('a document matching none of several headings is still restructured beyond recognition, not partially merged', () => {
+  const BACKLOG = ['## Decisions taken', '## Open decisions'];
+  const planned = '## Decisions taken\n\ntheirs\n\n## Open decisions\n\nalso theirs\n';
+  assert.equal(mergeGeneratedSections('# My own notes\n', planned, BACKLOG), null);
+});
+
+test('a new leading heading with no earlier anchor is dropped rather than guessed at', () => {
+  // The one gap the insert-tolerance leaves open (see mergeGeneratedSections'
+  // doc comment): a section new to this version that comes *before* every
+  // heading the file already has has nowhere to anchor to, so it is left out
+  // — the merge still succeeds on the section that does match.
+  const HEADINGS = ['## New first section', '## Decisions taken'];
+  const disk = '# Decisions\n\n## Decisions taken\n\nmine\n';
+  const planned = '## New first section\n\nbrand new\n\n## Decisions taken\n\ntheirs\n';
+
+  const merged = mergeGeneratedSections(disk, planned, HEADINGS);
+
+  assert.doesNotMatch(merged, /New first section/, 'no anchor existed before it, so it is not inserted');
+  assert.match(merged, /## Decisions taken\n\ntheirs/, 'the section that does match still refreshes');
 });
 
 test('a stale manifest baseline no longer forces a conflict on a mergeable file', () => {

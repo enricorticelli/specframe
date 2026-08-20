@@ -347,7 +347,13 @@ export function renderGlossaryIndex(resolved) {
 
 export function renderOpenDecisions(resolved) {
   if (resolved.open.length === 0) {
-    return 'Every decision in the specframe catalog has been recorded. When a new\ndecision arises that no ADR covers, add it under `docs/adr/` and list it here.';
+    // A decision missing from the backlog got there one of two ways — recorded,
+    // or dismissed as not applicable — and the sentence has to admit both, or a
+    // legacy repo that dismissed its way to zero open decisions reads as if it
+    // had answered questions it explicitly declined to.
+    return resolved.dismissed.length > 0
+      ? 'Every decision in the specframe catalog has been recorded or dismissed as not applicable. When a new\ndecision arises that no ADR covers, add it under `docs/adr/` and list it here.'
+      : 'Every decision in the specframe catalog has been recorded. When a new\ndecision arises that no ADR covers, add it under `docs/adr/` and list it here.';
   }
 
   const lines = [];
@@ -379,4 +385,72 @@ export function renderTakenDecisions(resolved) {
     );
   }
   return lines.join('\n');
+}
+
+// A dismissal renders as a statement, not a checkbox: a checkbox says work is
+// outstanding, and the entire point of dismissing a decision is that none is.
+// No ADR link — dismissing produces no ADR (see docs/DECISIONS.md's own
+// explanation of why) — so there is nothing to link to.
+export function renderDismissedDecisions(resolved) {
+  if (resolved.dismissed.length === 0) {
+    return '_None._ Dismiss one with `specframe dismiss <id>` when it can never apply here.';
+  }
+
+  const lines = [];
+  for (const { group, decisions } of groupOpenDecisions(resolved.dismissed)) {
+    lines.push(`### ${group.title}`, '');
+    lines.push('| Decision | Why not | Since |', '| --- | --- | --- |');
+    for (const decision of decisions) {
+      const entry = resolved.dismissed.find((d) => d.decision.id === decision.id);
+      const reason = entry.reason ?? 'Not applicable to this repository.';
+      lines.push(`| ${decision.title} | ${reason} | ${entry.date ?? 'unknown'} |`);
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd();
+}
+
+// --- ADRs outside the catalog ------------------------------------------------
+//
+// `specframe adr new` records a decision the catalog never asked about — empty
+// sections, no alternatives, no rejected options, because there was no
+// question to weigh them against. The file it produces is the caller's from
+// the first write; only this index entry is specframe's to keep current.
+
+export function renderLocalAdr({ number, title, date }) {
+  return [
+    `# ADR-${number}: ${title}`,
+    '',
+    '- Status: proposed',
+    `- Date: ${date}`,
+    '',
+    '## Context',
+    '',
+    '<!-- Why does this decision need to be made? What forces are in tension? -->',
+    '',
+    '## Decision',
+    '',
+    '<!-- What was decided, stated as a complete sentence. -->',
+    '',
+    '## Consequences',
+    '',
+    '- ',
+    '',
+    '## Alternatives considered',
+    '',
+    '- ',
+    '',
+  ].join('\n');
+}
+
+export function renderLocalAdrIndex(localAdrs = []) {
+  if (localAdrs.length === 0) {
+    return '<!-- None recorded yet. Run `specframe adr new <slug> --title "..."`. -->';
+  }
+
+  const rows = [...localAdrs]
+    .sort((a, b) => a.number.localeCompare(b.number))
+    .map((a) => `| [ADR-${a.number}](./${a.number}-${a.slug}.md) | ${a.title} |`);
+
+  return ['| ADR | Title |', '| --- | --- |', ...rows].join('\n');
 }
