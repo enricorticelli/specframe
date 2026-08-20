@@ -11,17 +11,19 @@ import {
 } from './answers.js';
 import { BLUEPRINTS, BLUEPRINT_IDS } from './decisions/blueprints.js';
 import { getDecision, isRelevant } from './decisions/catalog.js';
+import { explainDecision } from './decisions/explain.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
 import { askQuestions, askRevision, parseAgentTargets, renderReview } from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
-import { diffAnswers } from './review.js';
+import { buildReview, diffAnswers, reviewToJSON } from './review.js';
 import { configureTheme, terminalWidth, theme, wrapText } from './style.js';
 import {
   decideTemplateSet,
   normalizeConfig,
   planRevisionEffects,
+  recordLocalAdr,
   reviseTemplateSet,
   today,
   uninstallTemplateSet,
@@ -46,6 +48,7 @@ const VALUE_FLAGS = new Set([
   '--name',
   '--pm',
   '--agents',
+  '--title',
 ]);
 
 export function parseArgs(argv) {
@@ -58,6 +61,7 @@ export function parseArgs(argv) {
     detected: false,
     noColor: false,
     open: false,
+    json: false,
   };
   let command = 'init';
   let commandSeen = false;
@@ -73,6 +77,7 @@ export function parseArgs(argv) {
     if (arg === '--detected') { flags.detected = true; continue; }
     if (arg === '--no-color' || arg === '--no-colour') { flags.noColor = true; continue; }
     if (arg === '--open') { flags.open = true; continue; }
+    if (arg === '--json') { flags.json = true; continue; }
 
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
@@ -95,10 +100,12 @@ export function parseArgs(argv) {
       continue;
     }
 
-    // A second bare argument is the command's subject — today only
-    // `revise <decision-id>`. Kept as the first one wins, so a stray third
+    // A second bare argument is the command's subject — `revise <decision-id>`,
+    // `explain <decision-id>`, or `adr <subcommand>`. A third is `adr new
+    // <slug>`'s slug. Kept as first-one-wins per slot, so a stray extra
     // argument cannot quietly redirect the command.
-    if (flags.target === undefined) flags.target = arg;
+    if (flags.target === undefined) { flags.target = arg; continue; }
+    if (flags.target2 === undefined) flags.target2 = arg;
   }
 
   return { command, flags };
@@ -121,6 +128,10 @@ Usage:
   specframe [init] [options]     Scaffold context files at the repo root.
   specframe decide [options]     Record decisions still open in this repo.
   specframe review [options]     Show the decisions recorded here, as a table.
+  specframe explain <id>         Show one decision's brief: question, context,
+                                  every option with its tradeoff.
+  specframe adr new <slug>       Record an ADR for a decision outside the
+                                  catalog — a project-specific choice.
   specframe revise [id]          Change a decision already recorded.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
@@ -172,6 +183,20 @@ Decide options:
 
 Review options:
       --open       Only the decisions still open.
+      --json       Machine-readable: counts plus one object per decision
+                   (status, value, ADR path). What \`specframe-decide\` reads.
+
+Explain options:
+      --json       Machine-readable: question, context, and every option with
+                   its statement, consequences, tradeoff and what it emits.
+                   Works before init too — there is just no repo context yet.
+
+Adr options ('adr new <slug> --title "..."'):
+      --title      Required. The ADR's title.
+  -n, --dry-run    Show what would be written, without writing it.
+      --json       Print { number, slug, title, relpath } instead of a message.
+                   The number comes from a band (9000+) the catalog never
+                   allocates, so it can never collide with a future decision.
 
 Revise options:
       --set k=v,...  Revise without prompting, e.g.
@@ -423,6 +448,33 @@ async function runDecide(cwd, version, flags) {
   }
 
   const config = { ...stored, mode: 'guided', decisions, provenance };
+
+  // `--dry-run --json` is the preview `specframe-decide` shows before writing
+  // anything: the plan as data, not console lines meant for a terminal.
+  if (flags.json) {
+    const actions = await decideTemplateSet({
+      targetDir,
+      ...config,
+      version,
+      dryRun: flags.dryRun,
+      quiet: true,
+    });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          recorded: newlyDecided,
+          files: actions
+            .filter((a) => a.action !== 'up-to-date')
+            .map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
   console.log('');
   await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
   logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));
@@ -445,6 +497,13 @@ async function runReview(cwd, flags) {
   }
 
   const stored = normalizeConfig(manifest.config);
+
+  if (flags.json) {
+    const review = buildReview(stored.decisions ?? {});
+    console.log(JSON.stringify({ version: manifest.version ?? null, ...reviewToJSON(review) }, null, 2));
+    return;
+  }
+
   const width = terminalWidth();
 
   console.log('');
@@ -465,6 +524,115 @@ async function runReview(cwd, flags) {
       open > 0
         ? '  `specframe decide` records the open ones.'
         : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
+    ),
+  );
+}
+
+// The decision brief — the `?` the interactive wizard shows for one question,
+// available without a terminal. Works even without a manifest (a fresh
+// directory, before `init`): there is simply no repository context to fold in,
+// so the decision shows as open and always relevant. This is what
+// `specframe-decide` reads before proposing anything, and what a human can run
+// on its own to see the alternatives a given decision weighs.
+async function runExplain(cwd, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const id = flags.target;
+  if (!id) {
+    throw new Error('Usage: specframe explain <decision-id> [--json]\n\nRun `specframe review` to see decision ids.');
+  }
+
+  const manifest = await readManifest(targetDir);
+  const stored = manifest?.config ? normalizeConfig(manifest.config) : null;
+  const explanation = explainDecision(id, {
+    answers: stored?.decisions ?? {},
+    provenance: stored?.provenance ?? {},
+  });
+  if (!explanation) {
+    throw new Error(
+      `Unknown decision: ${id}\nRun \`specframe review\` to see the decisions this repository records.`,
+    );
+  }
+
+  if (flags.json) {
+    console.log(JSON.stringify(explanation, null, 2));
+    return;
+  }
+
+  console.log(formatExplanation(explanation));
+}
+
+function formatExplanation(exp) {
+  const lines = [];
+  lines.push(`${theme.bold(exp.title)} ${theme.muted(`(ADR-${exp.adr})`)}`, '');
+  lines.push(exp.question, '');
+  lines.push(theme.muted(exp.help), '');
+  lines.push(exp.context, '');
+
+  if (exp.status === 'decided') {
+    lines.push(
+      `${theme.good('Current:')} ${exp.current}` +
+        (exp.provenance === 'detected' ? theme.muted(' (detected, not chosen)') : ''),
+    );
+  } else {
+    lines.push(theme.warn('Not yet decided.'));
+  }
+  if (!exp.relevant) lines.push(theme.muted('Not currently relevant to this configuration.'));
+  lines.push('');
+
+  for (const option of exp.options) {
+    const marker = option.recommended ? theme.good(' ★ recommended') : '';
+    lines.push(`${theme.bold(option.label)}${marker}` + (option.hint ? theme.muted(`  — ${option.hint}`) : ''));
+    lines.push(`  ${option.statement}`);
+    for (const consequence of option.consequences) lines.push(`  - ${consequence}`);
+    lines.push(theme.muted(`  Tradeoff: ${option.tradeoff}`));
+    lines.push('');
+  }
+
+  return lines.join('\n').trimEnd();
+}
+
+// Record an ADR for a decision the catalog does not ask about — the CLI half
+// of the `specframe-record` skill. See writer.js's recordLocalAdr: the number
+// comes from the local band the catalog promises never to use, derived from
+// disk so it can never collide with what a future catalog adds.
+async function runAdrNew(cwd, version, flags) {
+  if (flags.target !== 'new') {
+    throw new Error(
+      `Unknown \`adr\` subcommand: ${flags.target ?? '(none)'}\n\n` +
+        'Usage: specframe adr new <slug> --title "..."',
+    );
+  }
+  const slug = flags.target2;
+  if (!slug || !/^[a-z0-9-]+$/.test(slug)) {
+    throw new Error('Usage: specframe adr new <slug> --title "..."\n\n<slug> must be lowercase, digits and hyphens.');
+  }
+  if (!flags.title) {
+    throw new Error('Usage: specframe adr new <slug> --title "..."\n\n--title is required.');
+  }
+
+  const targetDir = await resolveTargetDir(cwd);
+  const result = await recordLocalAdr({
+    targetDir,
+    version,
+    slug,
+    title: flags.title,
+    date: today(),
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(`${theme.good('[write]')} ${result.relpath}`);
+  console.log(theme.muted(`ADR-${result.number}: ${result.title}`));
+  console.log(
+    theme.muted(
+      flags.dryRun
+        ? '\nDry run complete. Nothing was written.'
+        : '\nFill in Context, Decision, Consequences and Alternatives, then set its Status.',
     ),
   );
 }
@@ -700,7 +868,9 @@ async function resolveTargetDir(cwd) {
   const root = await findRepoRoot(cwd);
   if (root) {
     if (root !== path.resolve(cwd)) {
-      console.log(`Operating on repository root: ${root}`);
+      // Informational, not the command's output — stderr, so `--json` callers
+      // piping stdout into a parser never see it mixed in.
+      console.error(`Operating on repository root: ${root}`);
     }
     return root;
   }
@@ -735,6 +905,16 @@ export async function run(argv = process.argv.slice(2)) {
 
   if (command === 'review') {
     await runReview(cwd, flags);
+    return;
+  }
+
+  if (command === 'explain') {
+    await runExplain(cwd, flags);
+    return;
+  }
+
+  if (command === 'adr') {
+    await runAdrNew(cwd, version, flags);
     return;
   }
 

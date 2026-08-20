@@ -11,5 +11,6 @@
 - Prefer small diffs.
 - If a new architectural choice appears, draft a new ADR.
 - If a new convention, rule, procedure, or term emerges, draft the matching doc.
-- Slash commands available when scaffolded: /specframe-specify, /specframe-plan, /specframe-review, /specframe-bootstrap (populate docs from an existing codebase).
-- Skills available when scaffolded (Claude only): specframe-adr-draft, specframe-rule-check, specframe-doc-sync.
+- Slash commands available when scaffolded: /specframe-decide (record a decision), /specframe-conform (review against ADRs/rules/guidelines), /specframe-bootstrap (populate docs from an existing codebase).
+- Skills available when scaffolded (Claude only): specframe-decide, specframe-record, specframe-conform, specframe-doc-sync.
+- Using Spec Kit, BMAD, OpenSpec, or a similar harness alongside this? See docs/INTEROP.md — it owns the spec and the plan, this scaffold owns the decision.

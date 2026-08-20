@@ -380,3 +380,48 @@ export function renderTakenDecisions(resolved) {
   }
   return lines.join('\n');
 }
+
+// --- ADRs outside the catalog ------------------------------------------------
+//
+// `specframe adr new` records a decision the catalog never asked about — empty
+// sections, no alternatives, no rejected options, because there was no
+// question to weigh them against. The file it produces is the caller's from
+// the first write; only this index entry is specframe's to keep current.
+
+export function renderLocalAdr({ number, title, date }) {
+  return [
+    `# ADR-${number}: ${title}`,
+    '',
+    '- Status: proposed',
+    `- Date: ${date}`,
+    '',
+    '## Context',
+    '',
+    '<!-- Why does this decision need to be made? What forces are in tension? -->',
+    '',
+    '## Decision',
+    '',
+    '<!-- What was decided, stated as a complete sentence. -->',
+    '',
+    '## Consequences',
+    '',
+    '- ',
+    '',
+    '## Alternatives considered',
+    '',
+    '- ',
+    '',
+  ].join('\n');
+}
+
+export function renderLocalAdrIndex(localAdrs = []) {
+  if (localAdrs.length === 0) {
+    return '<!-- None recorded yet. Run `specframe adr new <slug> --title "..."`. -->';
+  }
+
+  const rows = [...localAdrs]
+    .sort((a, b) => a.number.localeCompare(b.number))
+    .map((a) => `| [ADR-${a.number}](./${a.number}-${a.slug}.md) | ${a.title} |`);
+
+  return ['| ADR | Title |', '| --- | --- |', ...rows].join('\n');
+}

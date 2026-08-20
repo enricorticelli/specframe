@@ -1,4 +1,4 @@
-# specframe-rule-check
+# specframe-conform
 
 Auto-trigger when reviewing a diff, PR, or set of staged changes. Verify compliance with every enforced rule in `docs/rules/`.
 
@@ -7,7 +7,7 @@ Auto-trigger when reviewing a diff, PR, or set of staged changes. Verify complia
 Invoke when:
 - A diff or PR is under review.
 - The user asks whether a change is safe to merge.
-- Before a `/specframe-review` output is finalized.
+- Before a `/specframe-conform` output is finalized.
 
 ## Do
 

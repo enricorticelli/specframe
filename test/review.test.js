@@ -9,6 +9,7 @@ import {
   formatReviewTable,
   formatSectionDigest,
   openDecisionIds,
+  reviewToJSON,
 } from '../src/review.js';
 import { resolvePreset } from '../src/decisions/presets.js';
 import { plainTheme, stripAnsi, visibleWidth } from '../src/style.js';
@@ -189,4 +190,29 @@ test('a review of nothing renders a sentence, not an empty frame', () => {
   assert.equal(complete.open, 0);
   const rendered = stripAnsi(formatReviewTable(complete, { theme: plainTheme, width: 80, openOnly: true }));
   assert.match(rendered, /Nothing left open/);
+});
+
+// --- machine-readable projection, for `specframe review --json` ------------
+
+test('reviewToJSON counts match the review and every row survives the trip', () => {
+  const review = buildReview({ 'architecture-style': 'microservices' });
+  const json = reviewToJSON(review);
+
+  assert.deepEqual(json.counts, { total: review.total, decided: review.decided, open: review.open });
+  assert.equal(json.decisions.length, review.total);
+
+  const decided = json.decisions.find((d) => d.id === 'architecture-style');
+  assert.equal(decided.status, 'decided');
+  assert.equal(decided.value, 'microservices');
+  assert.equal(decided.adrPath, `docs/adr/${decided.adr}-architecture-style.md`);
+
+  const stillOpen = json.decisions.find((d) => d.status === 'open');
+  assert.equal(stillOpen.value, null);
+  assert.equal(stillOpen.adrPath, null);
+});
+
+test('reviewToJSON round-trips through JSON.stringify with no undefined holes', () => {
+  const review = buildReview(balanced);
+  const roundTripped = JSON.parse(JSON.stringify(reviewToJSON(review)));
+  assert.equal(roundTripped.decisions.length, review.total);
 });

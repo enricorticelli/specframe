@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
+import { LOCAL_ADR_MIN, LOCAL_ADR_STEP } from './decisions/catalog.js';
 import { pad, theme } from './style.js';
 import {
   renderAdr,
@@ -13,6 +14,8 @@ import {
   renderGlossaryIndex,
   renderGuideline,
   renderGuidelinesIndex,
+  renderLocalAdr,
+  renderLocalAdrIndex,
   renderOpenDecisions,
   renderRule,
   renderRulesIndex,
@@ -29,6 +32,19 @@ const templateDir = path.join(__dirname, 'templates');
 // reused by every later `update`, so re-running the CLI never rewrites a date
 // and never produces a spurious content-hash change.
 const FALLBACK_DATE = '2026-01-01';
+
+// Substituted into every agent body that shells out to the CLI (specframe-decide,
+// specframe-record, bootstrapper — see their .body.md.tpl files). specframe's own
+// pitch is "zero install"; a repo scaffolded with a bare `npx specframe` has no
+// `specframe` on PATH, and an agent that gets "command not found" and has no
+// other instruction tends to invent an ADR by hand instead — the exact failure
+// this whole tool exists to prevent. One shared note, substituted everywhere,
+// so the fallback only needs writing once.
+const CLI_FALLBACK_NOTE =
+  'Run these as `specframe <args>`. If the shell reports the command is not found,\n' +
+  'this repository was set up with `npx specframe` and never installed it — use\n' +
+  '`npx --yes specframe <args>` instead, same behaviour, no install required. Never\n' +
+  'substitute writing the file yourself for a command that fails to run.';
 
 export function today() {
   return new Date().toISOString().slice(0, 10);
@@ -78,13 +94,15 @@ const TEMPLATE_TARGETS = [
 // them is prose the user is invited to rewrite, and a refresh has to be able to
 // land without touching it.
 const INDEX_SECTION = ['## Index'];
+const ADR_README_SECTIONS = ['## Index', '## Decisions outside the catalog'];
 const BACKLOG_SECTIONS = ['## Decisions taken', '## Open decisions'];
 
 const CONTENT_TARGETS = [
   { template: 'docs-readme.md.tpl', target: 'docs/README.md' },
   { template: 'decisions.md.tpl', target: 'docs/DECISIONS.md', regenerable: true, generated: BACKLOG_SECTIONS },
+  { template: 'interop.md.tpl', target: 'docs/INTEROP.md' },
 
-  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md', section: 'adr', regenerable: true, generated: INDEX_SECTION },
+  { template: 'adr-readme.md.tpl', target: 'docs/adr/README.md', section: 'adr', regenerable: true, generated: ADR_README_SECTIONS },
   { template: 'adr-0000-template.md.tpl', target: 'docs/adr/0000-template.md' },
   { template: 'adr-0001-decision-policy.md.tpl', target: 'docs/adr/0001-repository-decision-policy.md' },
 
@@ -191,25 +209,33 @@ const RULES_ADAPTERS = {
   },
 };
 
+// specframe ships no per-feature planning asset (spec/plan, an "explorer" or
+// "planner" subagent): every harness already has those, and duplicating them
+// is what made specframe read as a competitor to Spec Kit/BMAD/OpenSpec instead
+// of their complement. What is here is decision-shaped only. See docs/INTEROP.md.
+//
+// `body` names the file in `agents-src/bodies/` to render (defaults to `name`);
+// it exists so two entries that share a name across kinds — `specframe-decide`
+// is both a command and a skill, on purpose, since it is one workflow — or two
+// entries that reuse one name for a different scope, can point at distinct or
+// identical body files without a naming collision on disk.
 const AGENT_TEMPLATES = {
   agents: [
-    { name: 'explorer', description: 'Explore the codebase to answer questions. Read-only.' },
-    { name: 'planner', description: 'Produce implementation plans. Reads ADRs/rules/guidelines first.' },
-    { name: 'reviewer', description: 'Review diffs against ADRs/rules/guidelines.' },
     { name: 'bootstrapper', description: 'Populate ADR/rules/guidelines/runbook/glossary docs by analyzing an existing codebase.' },
     // model is only rendered by the claude adapter today (see AGENT_ADAPTERS.claude.renderAgent);
     // copilot/codex ignore the extra field safely since their renderAgent doesn't destructure it.
     { name: 'doc-writer', description: 'Render a decided doc entry (ADR, rule, guideline, runbook, or glossary term) into its template file. Mechanical only — does not decide content.', model: 'haiku' },
+    { name: 'conformance', description: 'Review diffs against the ADRs, rules and guidelines recorded in this repository.' },
   ],
   commands: [
-    { name: 'specframe-specify', description: 'Draft a spec from a request.' },
-    { name: 'specframe-plan', description: 'Produce an implementation plan from a spec.' },
-    { name: 'specframe-review', description: 'Review current changes against ADRs/rules/guidelines.' },
+    { name: 'specframe-decide', description: 'Register an architectural decision — from the catalog or project-specific — with an agent in the loop.', body: 'specframe-decide' },
+    { name: 'specframe-conform', description: 'Review current changes against ADRs/rules/guidelines.', body: 'specframe-conform-command' },
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
   ],
   skills: [
-    { name: 'specframe-adr-draft', description: 'Auto-trigger when an architectural decision is being made: draft a new ADR.' },
-    { name: 'specframe-rule-check', description: 'Auto-trigger on diff/PR review: verify compliance with enforced rules.' },
+    { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
+    { name: 'specframe-record', description: 'Auto-trigger when a decision outside the catalog needs an ADR — a project-specific choice the guided pass never asked about.' },
+    { name: 'specframe-conform', description: 'Auto-trigger on diff/PR review: verify compliance with enforced rules.', body: 'specframe-conform-check' },
     { name: 'specframe-doc-sync', description: 'Auto-trigger when a new convention, term, or procedure emerges without a matching doc.' },
   ],
 };
@@ -247,6 +273,14 @@ async function writeIfMissing(targetPath, content, targetDir) {
   return true;
 }
 
+// Every body lives flat in agents-src/bodies/, named by `entry.body` when the
+// entry declares one, or by `entry.name` otherwise — see the comment on
+// AGENT_TEMPLATES for why a name can need a body file of its own.
+async function readBody(entry, vars) {
+  const bodyPath = path.join(templateDir, 'agents-src', 'bodies', `${entry.body ?? entry.name}.body.md.tpl`);
+  return renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+}
+
 async function buildAgentEntries({ targets, vars }) {
   const entries = [];
 
@@ -255,23 +289,20 @@ async function buildAgentEntries({ targets, vars }) {
     if (!adapter) continue;
 
     for (const entry of AGENT_TEMPLATES.agents) {
-      const bodyPath = path.join(templateDir, 'agents-src', 'agents', `${entry.name}.body.md.tpl`);
-      const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+      const body = await readBody(entry, vars);
       const content = adapter.renderAgent({ name: entry.name, description: entry.description, body, model: entry.model });
       entries.push({ relpath: adapter.agentPath(entry.name), content, managed: true });
     }
 
     for (const entry of AGENT_TEMPLATES.commands) {
-      const bodyPath = path.join(templateDir, 'agents-src', 'commands', `${entry.name}.body.md.tpl`);
-      const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+      const body = await readBody(entry, vars);
       const content = adapter.renderCommand({ name: entry.name, description: entry.description, body });
       entries.push({ relpath: adapter.commandPath(entry.name), content, managed: true });
     }
 
     if (adapter.skillPath) {
       for (const entry of AGENT_TEMPLATES.skills) {
-        const bodyPath = path.join(templateDir, 'agents-src', 'skills', `${entry.name}.body.md.tpl`);
-        const body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+        const body = await readBody(entry, vars);
         const content = adapter.renderSkill({ name: entry.name, description: entry.description, body });
         entries.push({ relpath: adapter.skillPath(entry.name), content, managed: true });
       }
@@ -362,6 +393,9 @@ export function normalizeConfig(config = {}) {
     revisions,
     agentTargets: config.agentTargets ?? [],
     initDate: config.initDate ?? FALLBACK_DATE,
+    // ADRs recorded outside the catalog via `specframe adr new` — see
+    // recordLocalAdr below. { number, slug, title, date }, oldest first.
+    localAdrs: Array.isArray(config.localAdrs) ? config.localAdrs : [],
   };
 }
 
@@ -373,7 +407,7 @@ export function normalizeConfig(config = {}) {
  */
 export async function buildTemplatePlan(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
-  const { projectName, packageManager, mode, decisions, provenance, revisions, agentTargets, initDate } =
+  const { projectName, packageManager, mode, decisions, provenance, revisions, agentTargets, initDate, localAdrs } =
     config;
 
   const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions });
@@ -384,6 +418,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
     initDate,
     takenDecisions: renderTakenDecisions(resolved),
     openDecisions: renderOpenDecisions(resolved),
+    cliFallback: CLI_FALLBACK_NOTE,
   };
 
   const plan = [];
@@ -397,7 +432,13 @@ export async function buildTemplatePlan(rawConfig = {}) {
     if (item.blankOnly && mode !== 'blank') continue;
     const templateText = await readFile(path.join(templateDir, 'content', item.template), 'utf8');
     const fileVars = item.section
-      ? { ...vars, index: SECTION_INDEX_RENDERERS[item.section](resolved) }
+      ? {
+          ...vars,
+          index: SECTION_INDEX_RENDERERS[item.section](resolved),
+          // Only the adr README carries a second generated section — every
+          // other section index has nothing outside the catalog to list.
+          ...(item.section === 'adr' ? { localAdrIndex: renderLocalAdrIndex(localAdrs) } : {}),
+        }
       : vars;
     plan.push({
       relpath: item.target,
@@ -449,13 +490,25 @@ export async function writeTemplateSet(rawConfig) {
 // Read whatever each planned file currently holds on disk; a missing file is
 // simply absent from the returned map. Contents rather than hashes, because
 // refreshing a generated section in place needs the surrounding text.
-async function readDiskFiles(targetDir, plan) {
+//
+// Also reads every file the *previous* manifest tracked but this plan no
+// longer produces: an orphan. Without this, planUpdateActions would never see
+// disk state for one and could not tell "never touched, safe to remove" from
+// "the user edited this" — it would have to guess, which is exactly the
+// silent-discard risk orphan-remove exists to avoid. `manifest` is optional so
+// a caller reading disk for an unrelated reason (recordLocalAdr's single-file
+// refresh) can skip the extra reads.
+async function readDiskFiles(targetDir, plan, manifest) {
+  const relpaths = new Set(plan.map((entry) => entry.relpath));
+  for (const relpath of Object.keys(manifest?.files ?? {})) relpaths.add(relpath);
+
   const diskContents = {};
-  for (const { relpath } of plan) {
+  for (const relpath of relpaths) {
     try {
       diskContents[relpath] = await readFile(toAbsPath(targetDir, relpath), 'utf8');
     } catch {
-      // not on disk — leave it out so it is treated as "create".
+      // not on disk — leave it out so it is treated as "create" (planned) or
+      // as already gone (orphaned).
     }
   }
   return diskContents;
@@ -470,7 +523,7 @@ export async function updateTemplateSet(rawConfig) {
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskContents = await readDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan, manifest);
 
   const actions = planUpdateActions({ plan, manifest, diskContents, force });
 
@@ -536,7 +589,7 @@ export async function reviseTemplateSet(rawConfig) {
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskContents = await readDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan, manifest);
 
   const actions = planUpdateActions({
     plan: plan.map((entry) =>
@@ -570,11 +623,11 @@ export async function reviseTemplateSet(rawConfig) {
  * the prose someone added around an index survives every later `decide`.
  */
 export async function decideTemplateSet(rawConfig) {
-  const { targetDir, version, force = false, dryRun = false } = rawConfig;
+  const { targetDir, version, force = false, dryRun = false, quiet = false } = rawConfig;
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const manifest = await readManifest(targetDir);
-  const diskContents = await readDiskFiles(targetDir, plan);
+  const diskContents = await readDiskFiles(targetDir, plan, manifest);
 
   // Treat the indexes as managed for this operation only; their recorded
   // ownership in the manifest stays user-owned. Every other planned file keeps
@@ -586,7 +639,9 @@ export async function decideTemplateSet(rawConfig) {
     force,
   });
 
-  await applyActions({ targetDir, actions, dryRun });
+  // `quiet` is for a caller that wants the actions as data (`specframe decide
+  // --json`) rather than the per-file console lines meant for a terminal.
+  await applyActions({ targetDir, actions, dryRun, quiet });
 
   if (!dryRun) {
     await writeManifest(
@@ -598,7 +653,102 @@ export async function decideTemplateSet(rawConfig) {
   return actions;
 }
 
-async function applyActions({ targetDir, actions, dryRun }) {
+// --- decisions outside the catalog -----------------------------------------
+//
+// A project-specific ADR — "which payment provider" — has no catalog entry and
+// therefore no reserved number. It gets one from a band the catalog promises
+// never to use (LOCAL_ADR_MIN, see catalog.js), derived from what is already on
+// disk rather than from the manifest: the file is user-owned from the moment
+// it is written and is never deleted, so disk is the only source that can't
+// drift from what `specframe adr new` has actually allocated.
+async function nextLocalAdrNumber(targetDir) {
+  let entries = [];
+  try {
+    entries = await readdir(path.join(targetDir, 'docs', 'adr'));
+  } catch {
+    return String(LOCAL_ADR_MIN);
+  }
+
+  const used = entries
+    .map((name) => name.match(/^(\d{4,})-/))
+    .filter(Boolean)
+    .map((m) => Number(m[1]))
+    .filter((n) => n >= LOCAL_ADR_MIN);
+
+  return String(used.length === 0 ? LOCAL_ADR_MIN : Math.max(...used) + LOCAL_ADR_STEP);
+}
+
+/**
+ * Record an ADR for a decision the catalog does not ask about — the CLI half
+ * of the `specframe-record` skill (`specframe adr new`). Allocates the next
+ * free number in the local band, writes the file with empty sections for the
+ * caller to fill, and refreshes docs/adr/README.md's "Decisions outside the
+ * catalog" section through the same generated-section merge every other index
+ * on this repository uses.
+ */
+export async function recordLocalAdr({ targetDir, version, slug, title, date, dryRun = false, quiet = false }) {
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${MANIFEST_RELPATH} in ${targetDir}.\n` +
+        'Run `specframe init` first — `adr new` extends an existing scaffold.',
+    );
+  }
+
+  const config = normalizeConfig(manifest.config);
+  const number = await nextLocalAdrNumber(targetDir);
+  const relpath = `docs/adr/${number}-${slug}.md`;
+  const absPath = toAbsPath(targetDir, relpath);
+
+  // nextLocalAdrNumber always returns one past every number already on disk,
+  // so this only ever fires on a genuine race — two `adr new` calls reading
+  // the same directory before either has written its file. Cheap to check,
+  // and the alternative is silently clobbering whichever call loses the race.
+  if (await exists(absPath)) {
+    throw new Error(`${relpath} already exists.`);
+  }
+
+  const localAdrs = [...config.localAdrs, { number, slug, title, date }];
+  const nextConfig = { ...config, localAdrs };
+
+  if (!dryRun) {
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, renderLocalAdr({ number, title, date }), 'utf8');
+  }
+
+  // Refresh docs/adr/README.md the same way `decide` refreshes any index: the
+  // generated sections in place, everything the user wrote around them kept.
+  const plan = await buildTemplatePlan(nextConfig);
+  const readmeEntry = plan.find((entry) => entry.relpath === 'docs/adr/README.md');
+  const diskContents = await readDiskFiles(targetDir, [readmeEntry]);
+  const readmeActions = planUpdateActions({
+    plan: [{ ...readmeEntry, managed: true }],
+    manifest,
+    diskContents,
+    force: false,
+  });
+
+  await applyActions({ targetDir, actions: readmeActions, dryRun, quiet });
+
+  if (!dryRun) {
+    const readmeManifest = manifestFromActions({
+      plan: [{ ...readmeEntry, managed: true }],
+      actions: readmeActions,
+      previous: manifest,
+      version,
+      config: nextConfig,
+    });
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...manifest.config, localAdrs },
+      files: { ...manifest.files, ...readmeManifest.files },
+    });
+  }
+
+  return { number, slug, title, relpath, dryRun };
+}
+
+async function applyActions({ targetDir, actions, dryRun, quiet = false }) {
   for (const action of actions) {
     const rel = action.relpath;
     if (!dryRun) {
@@ -608,9 +758,13 @@ async function applyActions({ targetDir, actions, dryRun }) {
         await writeFile(absPath, action.content, 'utf8');
       } else if (action.action === 'conflict') {
         await writeFile(`${toAbsPath(targetDir, rel)}.specframe-new`, action.content, 'utf8');
+      } else if (action.action === 'orphan-remove') {
+        const absPath = toAbsPath(targetDir, rel);
+        await rm(absPath, { force: true });
+        await pruneEmptyDirs(path.dirname(absPath), targetDir);
       }
     }
-    reportAction(action, dryRun);
+    if (!quiet) reportAction(action, dryRun);
   }
 }
 
@@ -622,6 +776,7 @@ const ACTION_LABEL = {
   conflict: 'conflict',
   'skip-user': 'keep',
   orphan: 'orphan',
+  'orphan-remove': 'remove',
 };
 
 function reportAction(action, dryRun) {
@@ -631,7 +786,8 @@ function reportAction(action, dryRun) {
   if (action.action === 'merge') suffix = ' (generated sections only — your text kept)';
   if (action.action === 'conflict') suffix = ` ${theme.glyph.arrow} wrote ${action.relpath}.specframe-new (yours kept)`;
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
-  if (action.action === 'orphan') suffix = ' (no longer generated — remove if unused)';
+  if (action.action === 'orphan') suffix = ' (no longer generated — edited by hand, so kept; remove it yourself if unused)';
+  if (action.action === 'orphan-remove') suffix = ' (no longer generated — never edited, so removed)';
   console.log(`${actionTag(label, { dryRun })}${action.relpath}${theme.muted(suffix)}`);
 }
 

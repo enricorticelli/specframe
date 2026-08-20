@@ -80,6 +80,31 @@ export function openDecisionIds(review) {
   return review.rows.filter((row) => row.status === 'open').map((row) => row.decision.id);
 }
 
+/**
+ * The same review, as plain data — for `specframe review --json`. An agent
+ * gets the state of every decision this repository has recorded or left open
+ * without parsing the table a human reads; `specframe explain <id> --json`
+ * is the next step once it has picked one.
+ */
+export function reviewToJSON(review) {
+  return {
+    counts: { total: review.total, decided: review.decided, open: review.open },
+    decisions: review.rows.map((row) => ({
+      id: row.decision.id,
+      group: row.group.id,
+      title: row.decision.title,
+      status: row.status,
+      value: row.option?.value ?? null,
+      label: row.option?.label ?? null,
+      recommended: row.recommended,
+      recommendedValue: recommendedValue(row.decision) ?? null,
+      adr: row.decision.adr,
+      adrPath: row.status === 'decided' ? `docs/adr/${row.decision.adr}-${row.decision.slug}.md` : null,
+    })),
+    notApplicable: review.notApplicable.map((entry) => ({ id: entry.decision.id, value: entry.value })),
+  };
+}
+
 // A decision's short name for the table. `title` is the catalog's own label;
 // falling back to the question keeps the table honest if one is ever missing.
 function decisionLabel(decision) {

@@ -37,15 +37,37 @@ test('plan uses forward-slash relpaths (manifest keys)', async () => {
 
 test('agent artifacts are managed and only present when targeted', async () => {
   const without = await buildTemplatePlan(baseOpts);
-  assert.equal(entryFor(without, '.claude/agents/explorer.md'), undefined);
+  assert.equal(entryFor(without, '.claude/agents/bootstrapper.md'), undefined);
 
   const withClaude = await buildTemplatePlan({ ...baseOpts, agentTargets: ['claude'] });
-  const explorer = entryFor(withClaude, '.claude/agents/explorer.md');
-  assert.ok(explorer, 'explorer agent should be planned for claude');
-  assert.equal(explorer.managed, true);
+  const bootstrapper = entryFor(withClaude, '.claude/agents/bootstrapper.md');
+  assert.ok(bootstrapper, 'bootstrapper agent should be planned for claude');
+  assert.equal(bootstrapper.managed, true);
 
-  const skill = entryFor(withClaude, '.claude/skills/specframe-adr-draft/SKILL.md');
+  const skill = entryFor(withClaude, '.claude/skills/specframe-decide/SKILL.md');
   assert.equal(skill.managed, true);
+});
+
+test('specframe-decide is shipped as both a command and a skill, sharing one body', async () => {
+  const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: ['claude'] });
+  const command = entryFor(plan, '.claude/commands/specframe-decide.md');
+  const skill = entryFor(plan, '.claude/skills/specframe-decide/SKILL.md');
+  assert.ok(command && skill, 'both the command and the skill should be planned');
+
+  const bodyOf = (content) => content.slice(content.indexOf('\n\n') + 2);
+  assert.equal(bodyOf(command.content), bodyOf(skill.content), 'one body, two surfaces');
+});
+
+test('the harness-shaped assets specframe used to ship are gone', async () => {
+  const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: ['claude'] });
+  for (const relpath of [
+    '.claude/agents/explorer.md',
+    '.claude/agents/planner.md',
+    '.claude/commands/specframe-specify.md',
+    '.claude/commands/specframe-plan.md',
+  ]) {
+    assert.equal(entryFor(plan, relpath), undefined, `${relpath} should not be planned`);
+  }
 });
 
 // --- modes -----------------------------------------------------------------

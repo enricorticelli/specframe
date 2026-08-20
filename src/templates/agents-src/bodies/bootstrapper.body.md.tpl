@@ -4,6 +4,8 @@ Reconstruct this repository's decision log from the code that already exists. Us
 
 The job is **archaeology, not design**. Every decision in this repository was already made and implemented; you are writing down what is true, with the evidence, not proposing what should be true.
 
+{{cliFallback}}
+
 ## When to use
 
 - After `specframe init` on a repository that already has a codebase.

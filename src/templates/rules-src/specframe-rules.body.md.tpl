@@ -18,3 +18,6 @@ rule, or coin a new term, add or update the matching document under `docs/`.
 
 If a task depends on a decision listed as open in `docs/DECISIONS.md`, raise it
 rather than choosing quietly: that choice belongs in an ADR, not in a diff.
+
+If this repository also uses a spec/plan harness (Spec Kit, BMAD, OpenSpec, or
+similar), see `docs/INTEROP.md` for how the two divide labour.

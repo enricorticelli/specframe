@@ -42,4 +42,10 @@ it affected.
 Agent roles and commands (if scaffolded): see .claude/, .github/, or .codex/
 depending on the tool in use.
 
+## Using this alongside a spec/plan tool
+
+If this repository also uses Spec Kit, BMAD, OpenSpec, or a similar harness,
+see `docs/INTEROP.md` for how the two divide labour: that tool owns the spec
+and the plan for one change; this scaffold owns the decision that outlives it.
+
 In the final summary, list the decision documents you consulted.

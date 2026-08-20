@@ -68,3 +68,27 @@ test('a second bare argument is the command subject, and a third cannot override
     'a flag in between does not consume it',
   );
 });
+
+test('--json is a plain boolean flag', () => {
+  assert.equal(parseArgs(['review']).flags.json, false);
+  assert.equal(parseArgs(['review', '--json']).flags.json, true);
+  assert.equal(parseArgs(['explain', 'tdd', '--json']).flags.json, true);
+});
+
+test('--title accepts both --flag value and --flag=value', () => {
+  assert.equal(parseArgs(['adr', 'new', 'x', '--title', 'My title']).flags.title, 'My title');
+  assert.equal(parseArgs(['adr', 'new', 'x', '--title=My title']).flags.title, 'My title');
+});
+
+test('explain takes its decision id as the command subject', () => {
+  assert.equal(parseArgs(['explain', 'architecture-style']).command, 'explain');
+  assert.equal(parseArgs(['explain', 'architecture-style']).flags.target, 'architecture-style');
+});
+
+test('`adr new <slug>` fills target and target2 in order', () => {
+  const { command, flags } = parseArgs(['adr', 'new', 'payments-provider', '--title', 'Payment provider']);
+  assert.equal(command, 'adr');
+  assert.equal(flags.target, 'new');
+  assert.equal(flags.target2, 'payments-provider');
+  assert.equal(flags.title, 'Payment provider');
+});

@@ -24,5 +24,5 @@ Invoke when:
 
 - Do not duplicate entries that already exist.
 - Do not rewrite entries authored by the user.
-- Do not create architectural decisions here — use `specframe-adr-draft` instead.
+- Do not create architectural decisions here — use `specframe-decide` (catalog) or `specframe-record` (project-specific) instead.
 - Do not write the file yourself once content is decided — delegate to `doc-writer`.

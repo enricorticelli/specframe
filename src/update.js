@@ -68,7 +68,8 @@ export function mergeGeneratedSections(disk, planned, headings = []) {
 //   force       When true, overwrite managed files even if the user edited them.
 //
 // Output: Array<{ relpath, managed, action, content? }> where action is one of
-//   create | up-to-date | overwrite | merge | conflict | skip-user | orphan
+//   create | up-to-date | overwrite | merge | conflict | skip-user | orphan |
+//   orphan-remove
 export function planUpdateActions({
   plan,
   manifest,
@@ -139,12 +140,21 @@ export function planUpdateActions({
     );
   }
 
-  // Managed files specframe used to produce but no longer does: surface them so
-  // the user can delete leftovers. User-owned files are their data — stay quiet.
+  // Managed files specframe used to produce but no longer does. User-owned
+  // files are their data — stay quiet, never listed here. A managed one is
+  // removed outright when it still holds exactly what specframe last wrote —
+  // there is nothing of the user's in it to lose — and only reported when it
+  // was edited by hand, or already gone, so nothing is silently discarded.
   for (const [relpath, info] of Object.entries(manifest?.files ?? {})) {
     if (planned.has(relpath)) continue;
     if (!info.managed) continue;
-    actions.push({ relpath, managed: true, action: 'orphan' });
+
+    const diskText = diskContents[relpath];
+    const diskHash = diskText !== undefined ? sha256(diskText) : diskHashes[relpath];
+    if (diskHash === undefined) continue; // already gone — nothing to report or remove
+
+    const untouchedSinceWrite = info.sha256 !== undefined && diskHash === info.sha256;
+    actions.push({ relpath, managed: true, action: untouchedSinceWrite ? 'orphan-remove' : 'orphan' });
   }
 
   return actions;

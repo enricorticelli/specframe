@@ -35,3 +35,13 @@ Decisions not yet taken are listed in [`../DECISIONS.md`](../DECISIONS.md).
 ## Index
 
 {{index}}
+
+## Decisions outside the catalog
+
+Decisions this repository has recorded that specframe's own catalog never asks
+about — a project-specific choice like which payment provider to use. Recorded
+with `specframe adr new <slug> --title "..."`, not by hand: that command
+reserves a number the catalog will never allocate, so the two can never
+collide.
+
+{{localAdrIndex}}

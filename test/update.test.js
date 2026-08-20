@@ -97,9 +97,22 @@ test('treats a managed file with no manifest baseline as a conflict', () => {
   assert.equal(actionFor(actions, 'agent.md').action, 'conflict');
 });
 
-test('reports managed manifest entries missing from the plan as orphans', () => {
+test('a managed file the plan no longer produces is removed, untouched since specframe wrote it', () => {
   const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
-  const diskHashes = { 'a.md': sha256('x') };
+  const diskHashes = { 'a.md': sha256('x'), 'removed-agent.md': sha256('gone') };
+  const manifest = manifestOf({
+    'a.md': { content: 'x', managed: true },
+    'removed-agent.md': { content: 'gone', managed: true },
+  });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'removed-agent.md').action, 'orphan-remove');
+});
+
+test('a managed file the plan no longer produces is only reported when it was edited by hand', () => {
+  const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
+  const diskHashes = { 'a.md': sha256('x'), 'removed-agent.md': sha256('my own edits') };
   const manifest = manifestOf({
     'a.md': { content: 'x', managed: true },
     'removed-agent.md': { content: 'gone', managed: true },
@@ -108,6 +121,19 @@ test('reports managed manifest entries missing from the plan as orphans', () => 
   const actions = planUpdateActions({ plan, manifest, diskHashes });
 
   assert.equal(actionFor(actions, 'removed-agent.md').action, 'orphan');
+});
+
+test('a managed orphan already gone from disk is neither removed nor reported', () => {
+  const plan = [{ relpath: 'a.md', content: 'x', managed: true }];
+  const diskHashes = { 'a.md': sha256('x') }; // no entry for removed-agent.md — already deleted
+  const manifest = manifestOf({
+    'a.md': { content: 'x', managed: true },
+    'removed-agent.md': { content: 'gone', managed: true },
+  });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'removed-agent.md'), undefined);
 });
 
 test('does not report user-owned manifest entries as orphans', () => {

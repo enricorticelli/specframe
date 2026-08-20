@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { DECISIONS, GROUPS, REGISTRIES, isRelevant } from '../src/decisions/catalog.js';
+import { DECISIONS, GROUPS, LOCAL_ADR_MIN, REGISTRIES, isRelevant } from '../src/decisions/catalog.js';
 import { GLOSSARY_GROUPS, GLOSSARY_TERMS } from '../src/decisions/glossary.js';
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -74,6 +74,16 @@ test('ADR numbers are unique, four digits, and in their group range', () => {
 test('generated ADR paths are unique', () => {
   const paths = DECISIONS.map((d) => `docs/adr/${d.adr}-${d.slug}.md`);
   assert.equal(new Set(paths).size, paths.length, 'two decisions render to the same file');
+});
+
+test('no catalog ADR ever reaches the local band reserved for `specframe adr new`', () => {
+  // A decision outside the catalog gets its number from LOCAL_ADR_MIN upward
+  // (writer.js's recordLocalAdr) precisely because the catalog promises never
+  // to allocate one there. Appending a group could in principle push numbers
+  // that high one day — this is the tripwire that would catch it.
+  for (const d of DECISIONS) {
+    assert.ok(Number(d.adr) < LOCAL_ADR_MIN, `${d.id} (ADR-${d.adr}) has entered the local ADR band`);
+  }
 });
 
 test('reserved ADR numbers do not collide with the static scaffolding', () => {
