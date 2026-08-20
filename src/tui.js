@@ -52,6 +52,12 @@ export const CONTROL = {
   SELECT: 'select',
   ENTER: 'enter',
   INVALID: 'invalid',
+  // Declares a decision (or, at a section gate, everything left in the
+  // section) can never apply to this repository — distinct from `SKIP`,
+  // which merely leaves a question open for later. See applyDecisionResult
+  // in prompts.js: unlike every other control word this one is not always
+  // available — only where the caller is actually tracking dismissals.
+  DISMISS: 'dismiss',
 };
 
 const CONTROL_WORDS = new Map([
@@ -65,6 +71,8 @@ const CONTROL_WORDS = new Map([
   ['defaults', CONTROL.DEFAULTS],
   ['b', CONTROL.BACK],
   ['back', CONTROL.BACK],
+  ['x', CONTROL.DISMISS],
+  ['dismiss', CONTROL.DISMISS],
   ['?', CONTROL.HELP],
   ['h', CONTROL.HELP],
   ['help', CONTROL.HELP],
@@ -260,6 +268,7 @@ export function formatGroupHeader({
             : `answer the ${questionCount} ${noun}`,
         ],
         ['s', 'leave the section open'],
+        ['x', 'the section does not apply here'],
         ['?', 'list them'],
         ['d', 'take every recommendation from here'],
         ['a', 'leave everything remaining open'],

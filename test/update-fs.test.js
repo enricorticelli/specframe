@@ -46,6 +46,7 @@ test('init writes a manifest capturing version and config', async () => {
       decisions: {},
       provenance: {},
       revisions: {},
+      dismissed: {},
       localAdrs: [],
     });
     assert.ok(manifest.files[MANAGED_AGENT].managed, 'bootstrapper is managed');

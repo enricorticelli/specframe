@@ -362,6 +362,7 @@ async function askDecision(io, { decision, number, total, answers, lead = null }
 
   const tail = [
     ['s', 'leave it open'],
+    ['x', 'never applies here'],
     ['?', 'why this matters'],
     ['b', 'back'],
     ['d', 'take every recommendation from here'],
@@ -400,17 +401,29 @@ async function askDecision(io, { decision, number, total, answers, lead = null }
 /**
  * Fold a prompt result into the answers map and say out loud what happened.
  *
- * Handles the three outcomes that are about *this* decision — a pick, `enter`,
- * `s` — and reports back when the result is flow control (back, quit, the
+ * Handles the outcomes that are about *this* decision — a pick, `enter`, `s`,
+ * `x` — and reports back when the result is flow control (back, quit, the
  * bulk keys) for the caller to deal with. Shared so that `enter` cannot come to
  * mean one thing in the wizard and another in the review table.
  *
+ * `dismissed` is the sibling of `answers` for the one decision `x` records —
+ * mutated in place the same way, and `null` wherever a caller has nothing to
+ * put a dismissal in (`specframe revise`'s table): the key still works there,
+ * it just says so instead of silently discarding the reason.
+ *
+ * Async only for the one branch that needs it — capturing the reason for a
+ * dismissal is another `io.question`, safe to open here because by the time a
+ * result reaches this function the picker's key reader is already closed (see
+ * runPicker's `finally`) and `createReadlineIo` builds and tears down a
+ * readline per question, so the two can never fight over stdin.
+ *
  * @returns {boolean} true when the result was an answer and has been applied.
  */
-function applyDecisionResult(io, { decision, result, answers }) {
+async function applyDecisionResult(io, { decision, result, answers, dismissed = null }) {
   if (result.kind === CONTROL.SELECT) {
     const option = decision.options[result.values[0] - 1];
     answers[decision.id] = option.value;
+    if (dismissed) delete dismissed[decision.id];
     io.log(formatChoiceEcho(decision, option, { theme }));
     return true;
   }
@@ -425,6 +438,7 @@ function applyDecisionResult(io, { decision, result, answers }) {
       return true;
     }
     answers[decision.id] = option.value;
+    if (dismissed) delete dismissed[decision.id];
     io.log(
       formatChoiceEcho(decision, option, {
         theme,
@@ -440,14 +454,39 @@ function applyDecisionResult(io, { decision, result, answers }) {
     return true;
   }
 
+  if (result.kind === CONTROL.DISMISS) {
+    if (!dismissed) {
+      io.log(formatSkipEcho('not available here — dismiss during setup, or run `specframe dismiss`', { theme }));
+      return true;
+    }
+    if (answers[decision.id] !== undefined) {
+      io.log(formatSkipEcho('already recorded — supersede it with `specframe revise` instead', { theme }));
+      return true;
+    }
+    const raw = await io.question('  Why not? [enter = not applicable here] ');
+    const reason = raw.trim() || null;
+    dismissed[decision.id] = { reason };
+    io.log(
+      formatSkipEcho(
+        reason ? `does not apply — ${reason}` : 'does not apply here',
+        { theme },
+      ),
+    );
+    return true;
+  }
+
   return false;
 }
 
-// The decision wizard. Returns the answers map, or null when the user quits.
-// `only` restricts it to a subset of decision ids — that is how `specframe
-// decide` reopens just the outstanding ones.
-async function askDecisions(io, { seed = {}, only = null } = {}) {
+// The decision wizard. Returns { answers, dismissed }, or null when the user
+// quits. `only` restricts it to a subset of decision ids — that is how
+// `specframe decide` reopens just the outstanding ones. `dismissed` follows
+// the same copy-in/return-out shape as `answers`; pass null where there is
+// nowhere for a dismissal to go (see applyDecisionResult) — `specframe
+// revise`'s walk, currently — and `x` says so instead of silently discarding it.
+async function askDecisions(io, { seed = {}, only = null, dismissed: dismissedSeed = null } = {}) {
   const answers = { ...seed };
+  const dismissed = dismissedSeed ? { ...dismissedSeed } : null;
   let skipRest = false;
 
   const inScope = (decision) => (only ? only.includes(decision.id) : true);
@@ -515,6 +554,17 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
         Object.assign(answers, applyRecommendedDefaults(answers, { only: remaining }));
         skipRest = true;
         gateAction = 'stop';
+      } else if (gate.kind === CONTROL.DISMISS) {
+        if (!dismissed) {
+          io.log(formatSkipEcho('not available here — dismiss during setup, or run `specframe dismiss`', { theme }));
+        } else {
+          const raw = await io.question('  Why does none of this apply? [enter = not applicable here] ');
+          const reason = raw.trim() || null;
+          for (const decision of relevant()) dismissed[decision.id] = { reason };
+          asked += relevant().length;
+          io.log(formatSkipEcho(`the whole section does not apply here${reason ? ` — ${reason}` : ''}`, { theme }));
+          gateAction = 'skip-group';
+        }
       } else {
         gateAction = 'enter';
       }
@@ -537,7 +587,7 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
       });
 
       if (result.kind === CONTROL.QUIT) return null;
-      if (applyDecisionResult(io, { decision, result, answers })) continue;
+      if (await applyDecisionResult(io, { decision, result, answers, dismissed })) continue;
       if (result.kind === CONTROL.BACK) {
         asked -= 1; // undo this question's own increment
         let j = i - 1;
@@ -568,7 +618,7 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
     }
   }
 
-  return answers;
+  return { answers, dismissed };
 }
 
 /**
@@ -578,15 +628,17 @@ async function askDecisions(io, { seed = {}, only = null } = {}) {
  * questions you fix answer twelve by typing 12, and you come straight back here.
  * `w` still walks every section, because sometimes you do want another pass.
  *
- * @returns {{ action: 'back'|'walk', decisions: object }} or null when quitting.
+ * @returns {{ action: 'back'|'walk', decisions: object, dismissed: object|null }}
+ *   or null when quitting.
  */
-async function reviewScreen(io, { decisions, editable = null }) {
+async function reviewScreen(io, { decisions, editable = null, dismissed: dismissedSeed = null }) {
   let answers = { ...decisions };
+  let dismissed = dismissedSeed ? { ...dismissedSeed } : null;
   let openOnly = false;
 
   for (;;) {
     const width = terminalWidth();
-    const review = buildReview(answers);
+    const review = buildReview(answers, { dismissed: dismissed ?? {} });
 
     io.log(sectionTitle('Answers', { width }));
     io.log('');
@@ -615,8 +667,8 @@ async function reviewScreen(io, { decisions, editable = null }) {
     const input = parseReviewInput(await io.question(PROMPT()), { total: review.total });
 
     if (input.kind === CONTROL.QUIT) return null;
-    if (input.kind === 'back') return { action: 'back', decisions: answers };
-    if (input.kind === 'walk') return { action: 'walk', decisions: answers };
+    if (input.kind === 'back') return { action: 'back', decisions: answers, dismissed };
+    if (input.kind === 'walk') return { action: 'walk', decisions: answers, dismissed };
 
     if (input.kind === CONTROL.INVALID) {
       io.log(formatError(`${input.reason}.`, { theme }));
@@ -650,9 +702,10 @@ async function reviewScreen(io, { decisions, editable = null }) {
         io.log(formatError('Nothing left open that this run may answer.', { theme }));
         continue;
       }
-      const answered = await askDecisions(io, { seed: answers, only: ids });
+      const answered = await askDecisions(io, { seed: answers, only: ids, dismissed });
       if (answered === null) return null;
-      answers = answered;
+      answers = answered.answers;
+      dismissed = answered.dismissed;
       continue;
     }
 
@@ -661,7 +714,9 @@ async function reviewScreen(io, { decisions, editable = null }) {
       if (editable && !editable.has(row.decision.id)) {
         io.log(
           formatError(
-            `${row.decision.title} is already recorded. Supersede it by editing docs/adr/${row.decision.adr}-${row.decision.slug}.md.`,
+            row.status === 'dismissed'
+              ? `${row.decision.title} was dismissed as not applicable. Run \`specframe restore ${row.decision.id}\` first if that is no longer true.`
+              : `${row.decision.title} is already recorded. Supersede it by editing docs/adr/${row.decision.adr}-${row.decision.slug}.md.`,
             { theme },
           ),
         );
@@ -677,7 +732,7 @@ async function reviewScreen(io, { decisions, editable = null }) {
       });
 
       if (result.kind === CONTROL.QUIT) return null;
-      if (applyDecisionResult(io, { decision: row.decision, result, answers })) {
+      if (await applyDecisionResult(io, { decision: row.decision, result, answers, dismissed })) {
         // handled: the answer is recorded and echoed
       } else if (result.kind === CONTROL.DEFAULTS) {
         // "The rest", from a review, means every decision still open — but never
@@ -692,7 +747,7 @@ async function reviewScreen(io, { decisions, editable = null }) {
 
       // A new answer can open questions the old one had retired, or retire ones
       // it had opened. Say so rather than letting the table silently grow.
-      const after = buildReview(answers);
+      const after = buildReview(answers, { dismissed: dismissed ?? {} });
       const delta = after.total - review.total;
       if (delta > 0) {
         io.log(formatSkipEcho(`${delta} more question(s) now apply`, { theme }));
@@ -713,8 +768,8 @@ function formatArtifactLine(s, { width = terminalWidth() } = {}) {
   return [`  ${theme.muted(theme.glyph.arrow)} ${lines[0].trim()}`, ...lines.slice(1)].join('\n');
 }
 
-function logSummary(io, decisions, { width = terminalWidth() } = {}) {
-  const review = buildReview(decisions);
+function logSummary(io, decisions, { width = terminalWidth(), dismissed = {} } = {}) {
+  const review = buildReview(decisions, { dismissed });
   const s = summarize(review.resolved);
 
   io.log(sectionTitle('Summary', { width }));
@@ -753,12 +808,13 @@ function logBlankSummary(io, { width = terminalWidth() } = {}) {
  *
  * @param {object}   options
  * @param {object}   options.io            prompt transport; defaults to readline over stdio.
- * @param {object}   options.seed          pre-filled answers (from --preset / --set / a manifest).
+ * @param {object}   options.seed          pre-filled answers (from --preset / --set / a manifest),
+ *                                         plus any dismissals already recorded (`seed.dismissed`).
  * @param {string}   options.mode          when set, the mode question is not asked.
  * @param {string[]} options.only          restrict the wizard to these decision ids.
  * @param {boolean}  options.close         close the io when finished (default true).
  * @param {string}   options.version       shown in the banner.
- * @returns config, or null when the user quits.
+ * @returns config (including `dismissed`), or null when the user quits.
  */
 export async function askQuestions({
   io = createReadlineIo(),
@@ -787,6 +843,7 @@ export async function askQuestions({
     // wrong turn costs a keystroke instead of a run.
     let mode = fixedMode ?? (await askMode(io));
     let seeded = seed.decisions ?? {};
+    let dismissed = seed.dismissed ?? {};
 
     while (mode === 'blueprint') {
       const picked = await askBlueprint(io);
@@ -805,7 +862,7 @@ export async function askQuestions({
 
     if (mode === 'blank') {
       logBlankSummary(io, { width });
-      return { ...project, mode: 'blank', decisions: {} };
+      return { ...project, mode: 'blank', decisions: {}, dismissed };
     }
 
     // Only what this run may change: with `only` set (that is, `specframe
@@ -815,15 +872,16 @@ export async function askQuestions({
 
     let decisions = seeded;
     for (;;) {
-      const answered = await askDecisions(io, { seed: decisions, only });
+      const answered = await askDecisions(io, { seed: decisions, only, dismissed });
       if (answered === null) return null;
-      decisions = answered;
+      decisions = answered.answers;
+      dismissed = answered.dismissed;
 
       // Confirm/review loop: the review screen returns here rather than
       // restarting the wizard, unless it is explicitly asked to walk again.
       let walkAgain = false;
       while (!walkAgain) {
-        const review = logSummary(io, decisions, { width });
+        const review = logSummary(io, decisions, { width, dismissed });
         io.log(
           formatKeys(
             [
@@ -837,16 +895,17 @@ export async function askQuestions({
 
         const confirm = parseConfirmInput(await io.question(PROMPT()));
 
-        if (confirm.kind === 'write') return { ...project, mode: 'guided', decisions };
+        if (confirm.kind === 'write') return { ...project, mode: 'guided', decisions, dismissed };
         if (confirm.kind === CONTROL.QUIT) return null;
         if (confirm.kind === CONTROL.INVALID) {
           io.log(formatError(`${confirm.reason}.`, { theme }));
           continue;
         }
 
-        const reviewed = await reviewScreen(io, { decisions, editable });
+        const reviewed = await reviewScreen(io, { decisions, editable, dismissed });
         if (reviewed === null) return null;
         decisions = reviewed.decisions;
+        dismissed = reviewed.dismissed;
         walkAgain = reviewed.action === 'walk';
       }
     }
@@ -905,7 +964,11 @@ export async function askRevision({
         lead: `Revising ${row.decision.id} ${theme.glyph.bullet} ${row.group.title}`,
       });
       if (result.kind === CONTROL.QUIT) return null;
-      applyDecisionResult(io, { decision: row.decision, result, answers });
+      // No `dismissed` map is threaded through a revision — dismiss only
+      // applies to an open decision, and everything reachable from `revise`
+      // is, by definition, already recorded. `x` here says so and changes
+      // nothing (see applyDecisionResult), same as everywhere else below.
+      await applyDecisionResult(io, { decision: row.decision, result, answers });
     }
 
     for (;;) {
@@ -916,7 +979,7 @@ export async function askRevision({
       if (reviewed.action === 'walk') {
         const walked = await askDecisions(io, { seed: answers });
         if (walked === null) return null;
-        answers = walked;
+        answers = walked.answers;
         continue;
       }
 
@@ -968,8 +1031,8 @@ export async function askRevision({
  * The read-only review used by `specframe review`: the same table, without any
  * prompting, so a recorded configuration can be read back in one command.
  */
-export function renderReview(decisions, { width = terminalWidth(), openOnly = false } = {}) {
-  const review = buildReview(decisions);
+export function renderReview(decisions, { width = terminalWidth(), openOnly = false, dismissed = {} } = {}) {
+  const review = buildReview(decisions, { dismissed });
   const s = summarize(review.resolved);
 
   return [

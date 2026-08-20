@@ -27,6 +27,12 @@ unrecorded decision made by an agent is the exact failure this repository is
 structured to prevent. Propose the decision, name the trade-off, and let it be
 recorded — then implement it.
 
+The same file also lists decisions dismissed as **not applicable here** — every
+frontend decision in a backend-only service, say. Treat that the same as a
+recorded choice: do not propose an option for it. If a task seems to need one
+anyway, say the dismissal looks wrong and why, and let a human decide whether
+to restore it — do not silently work around it.
+
 ## When something new emerges
 
 - A new architectural choice → draft an ADR in `docs/adr/`.

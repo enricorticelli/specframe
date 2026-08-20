@@ -24,13 +24,32 @@ function sectionBounds(lines, heading) {
  * Splice the generated sections of `planned` into `disk`, keeping every line
  * around them as the user left it.
  *
+ * A heading missing from `planned` means the template moved: specframe cannot
+ * know where the generated part belongs any more, so the whole merge bails.
+ * A heading missing from `disk`, though, is the ordinary shape of a version
+ * upgrade — this version's catalog grew a new generated section that no
+ * existing file has ever seen — and is inserted right after the section that
+ * merged just before it, rather than treated as a restructure. Without this,
+ * shipping so much as one new generated heading would make every file it
+ * appears in fail to merge on every repo scaffolded before that version:
+ * `update` would leave it forever un-refreshed (`skip-user`, a user-owned
+ * file is never overwritten), and `decide`/`revise` would drop a
+ * `.specframe-new` beside it on every single run.
+ *
+ * The one case this cannot help is a heading missing from disk with no
+ * earlier heading having matched yet — there is nowhere to anchor it, so it
+ * is dropped rather than guessed at (the same conservatism as before). In
+ * practice a new heading is appended after existing ones, so this only bites
+ * a section inserted ahead of every heading a repo already has.
+ *
  * @param {string} disk      what the file holds now.
  * @param {string} planned   what this version of specframe renders for it.
- * @param {string[]} headings the generated section headings, e.g. ['## Index'].
- * @returns {string|null} the merged document, or null when a heading is missing
- *   on either side — the file has been restructured enough that specframe
- *   cannot know where the generated part belongs, so the caller falls back to
- *   writing a `.specframe-new` sibling rather than guessing.
+ * @param {string[]} headings the generated section headings, in document order,
+ *   e.g. ['## Decisions taken', '## Open decisions'].
+ * @returns {string|null} the merged document, or null when no heading matched
+ *   at all — the file has been restructured beyond recognition, or a heading
+ *   is missing from `planned` — so the caller falls back to writing a
+ *   `.specframe-new` sibling rather than guessing.
  */
 export function mergeGeneratedSections(disk, planned, headings = []) {
   if (headings.length === 0) return null;
@@ -38,19 +57,31 @@ export function mergeGeneratedSections(disk, planned, headings = []) {
   let lines = disk.split('\n');
   const plannedLines = planned.split('\n');
 
-  for (const heading of headings) {
-    const target = sectionBounds(lines, heading);
-    const source = sectionBounds(plannedLines, heading);
-    if (target === null || source === null) return null;
+  let matched = false;
+  // Where the next section with no home on disk gets inserted: right after
+  // the end of whichever section merged most recently. Null until one has.
+  let insertAt = null;
 
-    lines = [
-      ...lines.slice(0, target.start),
-      ...plannedLines.slice(source.start, source.end),
-      ...lines.slice(target.end),
-    ];
+  for (const heading of headings) {
+    const source = sectionBounds(plannedLines, heading);
+    if (source === null) return null; // gone from the template — do not guess.
+    const sectionLines = plannedLines.slice(source.start, source.end);
+
+    const target = sectionBounds(lines, heading);
+    if (target === null) {
+      if (insertAt === null) continue; // no anchor yet — see the doc comment.
+      lines = [...lines.slice(0, insertAt), ...sectionLines, ...lines.slice(insertAt)];
+      insertAt += sectionLines.length;
+      matched = true;
+      continue;
+    }
+
+    lines = [...lines.slice(0, target.start), ...sectionLines, ...lines.slice(target.end)];
+    insertAt = target.start + sectionLines.length;
+    matched = true;
   }
 
-  return lines.join('\n');
+  return matched ? lines.join('\n') : null;
 }
 
 // Decide, per file, what `specframe update` should do — pure and fs-free so it

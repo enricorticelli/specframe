@@ -44,7 +44,7 @@ Every section answers exactly one question — the same way for humans and agent
 | `docs/guidelines/` | *How do we usually build this?* | Conventions & patterns to follow by default. |
 | `docs/runbook/` | *What do we do when it breaks?* | Diagnostics and recovery procedures. |
 | `docs/glossary/` | *What do words mean here?* | Domain terms, grouped by area. |
-| `docs/DECISIONS.md` | *What haven't we decided yet?* | The open backlog, each entry with a reserved ADR number. |
+| `docs/DECISIONS.md` | *What haven't we decided yet — or ruled out?* | The open backlog, each entry with a reserved ADR number, plus what's been dismissed as not applicable here. |
 | `docs/README.md` | *What goes where?* | The map: when to write a rule vs a guideline vs an ADR. |
 | `AGENTS.md` | *Where do I find all of this?* | The canonical index every agent reads first. |
 
@@ -185,11 +185,12 @@ npx specframe --mode blank
 
 The `bootstrapper` agent walks the checklist in `docs/DECISIONS.md`, hunts for evidence of each decision in the code — layout, config, migrations, CI, auth, instrumentation — and records only what it can prove, citing `path:line`. It writes through `specframe decide --detected`, so a reconstructed decision gets **the same canonical ADR, numbering and derived rules** a guided init would have produced. No parallel convention, no invented numbers.
 
-Three things it does deliberately:
+Four things it does deliberately:
 
 - **Leaves the unprovable open.** No evidence means the decision stays in `DECISIONS.md`. A confidently wrong ADR is worse than a visibly missing one.
 - **Flags partial adoption.** A decision the code follows in some places and not others is recorded *and* marked — usually the most valuable output of a first scan, since it's the decision the team believes it has made and hasn't.
 - **Doesn't pretend.** A `--detected` ADR says it documents an existing implementation, dates itself as *recorded not decided*, and asks you for the original reason — the one thing the code can't tell you.
+- **Proposes dismissals for what plainly doesn't apply.** A backend-only service has no frontend decisions to make, ever — the bootstrapper hands you a `specframe dismiss --group frontend --reason "..."` with the evidence of absence, rather than leaving nine questions open forever or, worse, deciding them itself. See [Decisions that don't apply](#decisions-that-dont-apply).
 
 Documents you already wrote are never touched, and a decision an existing ADR already covers is skipped rather than duplicated. Recording one by hand works the same way:
 
@@ -241,7 +242,7 @@ Nothing already on disk moves. A document's number comes from the catalog, not f
 
 `decide` shows the same review table, with the decisions already recorded dimmed: they're there for context, but a recorded decision is superseded by editing its ADR, not by re-answering it.
 
-Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — and a README you've written in is refreshed too, section by section: only the `## Index` table (and, in `DECISIONS.md`, the two decision lists) is replaced, so your own headings and prose around it survive. Restructure one past recognition and specframe stops guessing: the refreshed version lands beside it as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
+Your documents are never overwritten. The section indexes and `DECISIONS.md` *are* refreshed — describing the set is their job — and a README you've written in is refreshed too, section by section: only the `## Index` table (and, in `DECISIONS.md`, the three decision lists) is replaced, so your own headings and prose around it survive. Restructure one past recognition and specframe stops guessing: the refreshed version lands beside it as `.specframe-new`. An already-recorded decision is never rewritten here: that's what `specframe revise` is for, and it says so when you try.
 
 ### Deciding with an agent, not a wizard
 
@@ -288,6 +289,24 @@ specframe revise --set tdd=strict -n                 # preview first
 - **It tells you what it opened.** Choosing microservices makes five questions relevant that a monolith had retired; the run says so and points at `specframe decide`.
 
 The ADRs teach the command: every generated ADR ends with the exact `specframe revise <id>` line for its own decision.
+
+---
+
+## Decisions that don't apply
+
+Not every catalog decision belongs to every repository — every frontend decision in a backend-only service, event sourcing in a plain CRUD app. Left open, those sit in `docs/DECISIONS.md` forever as phantom work, and the progress bar in `specframe review` can never reach 100%. Dismiss them instead of leaving them open:
+
+```bash
+specframe dismiss ui-surface --reason "backend-only service, no UI here"
+specframe dismiss --group frontend --reason "no UI in this repo"   # a whole section at once
+specframe restore ui-surface                                       # back in the backlog if that changes
+```
+
+- **It only applies to a decision still open.** An already-decided one is changed with `revise` instead — dismissing exists to get an *unanswered* question out of the backlog, not to un-record a choice.
+- **No ADR is written.** A dismissal is a claim about this repository's shape, not a decision with alternatives weighed — the record lives in `docs/DECISIONS.md`'s third section, under "Decisions that do not apply", and in the manifest.
+- **The reason is optional, but worth giving.** Left out, it renders as "not applicable to this repository"; in six months, that reads very differently from an actual reason.
+- **`--group` is the ergonomic core.** Gates don't cascade into a dismissal — it deliberately records nothing about *why* the group applies or not, only that it doesn't — so `--group frontend` lets one reason cover every open, relevant decision in a section in one call, which is what makes the catalog's 52 questions tractable for a repository that only needs a third of them.
+- **An agent proposes, never decides.** The bootstrapper's evidence-of-absence bucket hands you a copy-pasteable `specframe dismiss` command; it never runs one itself.
 
 ---
 

@@ -61,6 +61,8 @@ test('control words work in short and long form, case-insensitively', () => {
     ['d', CONTROL.DEFAULTS],
     ['defaults', CONTROL.DEFAULTS],
     ['b', CONTROL.BACK],
+    ['x', CONTROL.DISMISS],
+    ['dismiss', CONTROL.DISMISS],
     ['?', CONTROL.HELP],
     ['help', CONTROL.HELP],
     ['q', CONTROL.QUIT],
@@ -78,6 +80,7 @@ test('empty input enters a group; s skips the whole group in one key', () => {
   assert.equal(parseGroupInput('a').kind, CONTROL.SKIP_ALL);
   assert.equal(parseGroupInput('d').kind, CONTROL.DEFAULTS);
   assert.equal(parseGroupInput('q').kind, CONTROL.QUIT);
+  assert.equal(parseGroupInput('x').kind, CONTROL.DISMISS, 'the whole section does not apply');
 });
 
 test('back is meaningless at a group gate and says so', () => {

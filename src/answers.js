@@ -120,12 +120,18 @@ export async function collectAnswerSources({ preset, blueprint, answersFile, set
 //
 // Walks the catalog in order and re-checks relevance at each step, so a
 // recommendation never answers a question that an earlier answer has retired.
-export function applyRecommendedDefaults(answers = {}, { only } = {}) {
+//
+// `dismissed` is relevant here for a reason that is easy to miss: a dismissed
+// decision *is* relevant per `isRelevant` — a dismissal is not a gate — so
+// without this it would look exactly like any other unanswered question and
+// `--yes` (or the wizard's `d`) would silently un-dismiss it.
+export function applyRecommendedDefaults(answers = {}, { only, dismissed = {} } = {}) {
   const filled = { ...answers };
   for (const decision of DECISIONS) {
     if (!isRelevant(decision, filled)) continue;
     if (only && !only.includes(decision.id)) continue;
     if (filled[decision.id] !== undefined) continue;
+    if (dismissed[decision.id] !== undefined) continue;
     const value = recommendedValue(decision);
     if (value !== undefined) filled[decision.id] = value;
   }

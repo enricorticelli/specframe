@@ -5,11 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
-import { LOCAL_ADR_MIN, LOCAL_ADR_STEP } from './decisions/catalog.js';
+import { LOCAL_ADR_MIN, LOCAL_ADR_STEP, getDecision } from './decisions/catalog.js';
 import { pad, theme } from './style.js';
 import {
   renderAdr,
   renderAdrIndex,
+  renderDismissedDecisions,
   renderGlossaryGroup,
   renderGlossaryIndex,
   renderGuideline,
@@ -95,7 +96,11 @@ const TEMPLATE_TARGETS = [
 // land without touching it.
 const INDEX_SECTION = ['## Index'];
 const ADR_README_SECTIONS = ['## Index', '## Decisions outside the catalog'];
-const BACKLOG_SECTIONS = ['## Decisions taken', '## Open decisions'];
+// The third heading is new as of the `dismissed` state and absent from every
+// docs/DECISIONS.md written before it — mergeGeneratedSections (update.js)
+// inserts it after `## Open decisions` on refresh rather than treating that as
+// a restructure, so it reaches existing repos instead of only new ones.
+const BACKLOG_SECTIONS = ['## Decisions taken', '## Open decisions', '## Decisions that do not apply'];
 
 const CONTENT_TARGETS = [
   { template: 'docs-readme.md.tpl', target: 'docs/README.md' },
@@ -398,6 +403,25 @@ export function normalizeConfig(config = {}) {
     if (clean.length > 0) revisions[id] = clean;
   }
 
+  // Dismissals, inverse-pruned from provenance's rule: kept only for a decision
+  // NOT recorded (a dismissal is dead the moment its decision is answered — see
+  // resolve.js, decided wins there too), and only for a known catalog id — the
+  // predicate being inverted means an unknown id would otherwise never prune
+  // itself out the way an unknown id in `provenance` does. Blank mode needs no
+  // special case: `decisions` is already forced to `{}` above, so every
+  // dismissal passes the "not recorded" test and survives, which is the point
+  // — a legacy repo scaffolded blank is the primary use case for this.
+  const dismissed = {};
+  for (const [id, entry] of Object.entries(config.dismissed ?? {})) {
+    if (decisions[id] !== undefined) continue;
+    if (!getDecision(id)) continue;
+    if (!entry || typeof entry !== 'object') continue;
+    dismissed[id] = {
+      date: typeof entry.date === 'string' ? entry.date : (config.initDate ?? FALLBACK_DATE),
+      reason: typeof entry.reason === 'string' && entry.reason.trim() !== '' ? entry.reason.trim() : null,
+    };
+  }
+
   return {
     configVersion: 2,
     projectName: config.projectName,
@@ -406,6 +430,7 @@ export function normalizeConfig(config = {}) {
     decisions,
     provenance,
     revisions,
+    dismissed,
     agentTargets: config.agentTargets ?? [],
     initDate: config.initDate ?? FALLBACK_DATE,
     // ADRs recorded outside the catalog via `specframe adr new` — see
@@ -422,10 +447,20 @@ export function normalizeConfig(config = {}) {
  */
 export async function buildTemplatePlan(rawConfig = {}) {
   const config = normalizeConfig(rawConfig);
-  const { projectName, packageManager, mode, decisions, provenance, revisions, agentTargets, initDate, localAdrs } =
-    config;
+  const {
+    projectName,
+    packageManager,
+    mode,
+    decisions,
+    provenance,
+    revisions,
+    dismissed,
+    agentTargets,
+    initDate,
+    localAdrs,
+  } = config;
 
-  const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions });
+  const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions, dismissed });
 
   const vars = {
     projectName,
@@ -433,6 +468,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
     initDate,
     takenDecisions: renderTakenDecisions(resolved),
     openDecisions: renderOpenDecisions(resolved),
+    dismissedDecisions: renderDismissedDecisions(resolved),
     cliFallback: CLI_FALLBACK_NOTE,
   };
 

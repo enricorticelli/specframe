@@ -10,7 +10,7 @@ import {
   validateAnswers,
 } from './answers.js';
 import { BLUEPRINTS, BLUEPRINT_IDS } from './decisions/blueprints.js';
-import { getDecision, isRelevant } from './decisions/catalog.js';
+import { GROUPS, decisionsForGroup, getDecision, isRelevant } from './decisions/catalog.js';
 import { explainDecision } from './decisions/explain.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
@@ -51,6 +51,8 @@ const VALUE_FLAGS = new Set([
   '--pm',
   '--agents',
   '--title',
+  '--reason',
+  '--group',
 ]);
 
 export function parseArgs(argv) {
@@ -135,6 +137,10 @@ Usage:
   specframe adr new <slug>       Record an ADR for a decision outside the
                                   catalog — a project-specific choice.
   specframe revise [id]          Change a decision already recorded.
+  specframe dismiss <id>         Declare a decision can never apply here — every
+                                  frontend decision in a backend-only service,
+                                  say. Leaves the open backlog with no ADR.
+  specframe restore <id>         Undo a dismissal; the decision reopens.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -190,7 +196,9 @@ Decide options:
 Review options:
       --open       Only the decisions still open.
       --json       Machine-readable: counts plus one object per decision
-                   (status, value, ADR path). What \`specframe-decide\` reads.
+                   (status — decided, open or dismissed — value, ADR path,
+                   and the dismissal reason where there is one). What
+                   \`specframe-decide\` reads.
 
 Explain options:
       --json       Machine-readable: question, context, and every option with
@@ -215,6 +223,25 @@ used to be. Documents the new answer no longer implies are reported, never
 deleted. A document you edited by hand is kept, with the new version beside it
 as <file>.specframe-new; an index is refreshed in place instead, section by
 section.
+
+Dismiss options ('dismiss <id>[,<id>...]' or 'dismiss --group <name>'):
+      --reason "..."  Why this repository will never take it. Optional — an
+                      omitted reason renders as "not applicable to this
+                      repository" — but a stated one is worth more in six
+                      months, when nobody can tell a judgement from tidying.
+      --group <name>  Dismiss every open, relevant decision in one section at
+                      once, with the same reason — nine frontend decisions in
+                      one call for a backend-only service. Off a terminal,
+                      needs --yes.
+  -n, --dry-run       Show what would be written, without writing it.
+      --json          Print { dismissed, reason, files } instead of a message.
+Only applies to a decision still open — an already-decided one is changed with
+\`revise\` instead. No ADR is written; the record lives in docs/DECISIONS.md and
+the manifest only. \`specframe restore <id>\` undoes it.
+
+Restore options ('restore <id>[,<id>...]'):
+  -n, --dry-run       Show what would be written, without writing it.
+      --json          Print { restored, files } instead of a message.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -254,6 +281,17 @@ function reportInvalidAnswers(invalid) {
 function currentDirName(cwd) {
   const parts = cwd.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || 'current-repo';
+}
+
+// The wizard's `x` key records only a reason (see applyDecisionResult in
+// prompts.js) — dating it happens once, here, when the run's config is
+// finalized, exactly like every ADR this same run produces shares one
+// `initDate` rather than a per-keystroke timestamp. `?? date` makes this safe
+// to call on a dismissal that already carries one (from a previous run).
+function stampDismissed(dismissed, date) {
+  return Object.fromEntries(
+    Object.entries(dismissed).map(([id, entry]) => [id, { date: entry.date ?? date, reason: entry.reason ?? null }]),
+  );
 }
 
 function logPlanSummary(resolved) {
@@ -415,8 +453,10 @@ async function runInit(cwd, version, flags) {
   const provenance = flags.detected
     ? Object.fromEntries(Object.keys(config.decisions ?? {}).map((id) => [id, 'detected']))
     : {};
-  const full = { ...config, provenance, initDate: today() };
-  logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions }));
+  const initDate = today();
+  const dismissed = stampDismissed(config.dismissed ?? {}, initDate);
+  const full = { ...config, provenance, dismissed, initDate };
+  logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions, dismissed: full.dismissed }));
   console.log('');
 
   await writeTemplateSet({ targetDir, ...full, version, overwrite });
@@ -443,7 +483,7 @@ async function runDecide(cwd, version, flags) {
   }
 
   const stored = normalizeConfig(manifest.config);
-  const resolvedBefore = resolveDecisions({ mode: 'guided', answers: stored.decisions });
+  const resolvedBefore = resolveDecisions({ mode: 'guided', answers: stored.decisions, dismissed: stored.dismissed });
   const openIds = resolvedBefore.open.map((o) => o.decision.id);
 
   if (openIds.length === 0) {
@@ -461,21 +501,31 @@ async function runDecide(cwd, version, flags) {
   reportInvalidAnswers(invalid);
 
   // A non-interactive source may only answer decisions that are still open;
-  // silently rewriting a recorded decision would contradict its ADR.
-  const alreadyDecided = Object.keys(valid).filter((id) => !openIds.includes(id));
+  // silently rewriting a recorded decision would contradict its ADR, and one
+  // that was dismissed needs `specframe restore` first, not a quiet answer.
+  const alreadyDecided = Object.keys(valid).filter((id) => stored.decisions[id] !== undefined);
   if (alreadyDecided.length > 0) {
     console.warn(
       `\nIgnoring decisions already recorded: ${alreadyDecided.join(', ')}\n` +
         'Supersede them by editing their ADR instead.\n',
     );
   }
+  for (const id of Object.keys(valid)) {
+    const dismissal = stored.dismissed[id];
+    if (!dismissal) continue;
+    console.warn(
+      theme.warn(`\nIgnoring ${id}: dismissed on ${dismissal.date}${dismissal.reason ? ` — ${dismissal.reason}` : ''}.`),
+    );
+    console.warn(theme.muted(`Run \`specframe restore ${id}\` first if that is no longer true.\n`));
+  }
   const fresh = Object.fromEntries(Object.entries(valid).filter(([id]) => openIds.includes(id)));
 
   let decisions;
+  let dismissed = stored.dismissed;
   const unattended = flags.yes || !process.stdin.isTTY;
   if (unattended) {
     decisions = flags.yes
-      ? applyRecommendedDefaults({ ...stored.decisions, ...fresh }, { only: openIds })
+      ? applyRecommendedDefaults({ ...stored.decisions, ...fresh }, { only: openIds, dismissed: stored.dismissed })
       : { ...stored.decisions, ...fresh };
     if (Object.keys(fresh).length === 0 && !flags.yes) {
       throw new Error(
@@ -499,10 +549,15 @@ async function runDecide(cwd, version, flags) {
       return;
     }
     decisions = answered.decisions;
+    dismissed = stampDismissed(answered.dismissed ?? {}, today());
   }
 
   const newlyDecided = Object.keys(decisions).filter((id) => stored.decisions[id] === undefined);
-  if (newlyDecided.length === 0) {
+  // Dismissing something is also recording something, even when no option was
+  // chosen — a wizard session that only pressed `x` a few times must not be
+  // discarded as if nothing happened.
+  const newlyDismissed = Object.keys(dismissed).filter((id) => stored.dismissed[id] === undefined);
+  if (newlyDecided.length === 0 && newlyDismissed.length === 0) {
     console.log(theme.muted('\nNo new decisions were recorded. Nothing was written.'));
     return;
   }
@@ -514,7 +569,7 @@ async function runDecide(cwd, version, flags) {
     for (const id of newlyDecided) provenance[id] = 'detected';
   }
 
-  const config = { ...stored, mode: 'guided', decisions, provenance };
+  const config = { ...stored, mode: 'guided', decisions, dismissed, provenance };
 
   // `--dry-run --json` is the preview `specframe-decide` shows before writing
   // anything: the plan as data, not console lines meant for a terminal.
@@ -531,6 +586,7 @@ async function runDecide(cwd, version, flags) {
         {
           dryRun: flags.dryRun,
           recorded: newlyDecided,
+          dismissed: newlyDismissed,
           files: actions
             .filter((a) => a.action !== 'up-to-date')
             .map((a) => ({ relpath: a.relpath, action: a.action })),
@@ -544,10 +600,11 @@ async function runDecide(cwd, version, flags) {
 
   console.log('');
   await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
-  logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions }));
-  console.log(
-    flags.dryRun ? '\nDry run complete. Nothing was written.' : `\nRecorded ${newlyDecided.length} decisions.`,
-  );
+  logPlanSummary(resolveDecisions({ mode: 'guided', answers: decisions, dismissed }));
+  const parts = [];
+  if (newlyDecided.length > 0) parts.push(`Recorded ${newlyDecided.length} decision${newlyDecided.length === 1 ? '' : 's'}`);
+  if (newlyDismissed.length > 0) parts.push(`dismissed ${newlyDismissed.length}`);
+  console.log(flags.dryRun ? '\nDry run complete. Nothing was written.' : `\n${parts.join(', ')}.`);
 }
 
 // Read back what this repository has decided, as the same table the wizard
@@ -566,7 +623,7 @@ async function runReview(cwd, flags) {
   const stored = normalizeConfig(manifest.config);
 
   if (flags.json) {
-    const review = buildReview(stored.decisions ?? {});
+    const review = buildReview(stored.decisions ?? {}, { dismissed: stored.dismissed ?? {} });
     console.log(JSON.stringify({ version: manifest.version ?? null, ...reviewToJSON(review) }, null, 2));
     return;
   }
@@ -582,15 +639,19 @@ async function runReview(cwd, flags) {
     ),
   );
   console.log('');
-  console.log(renderReview(stored.decisions ?? {}, { width, openOnly: flags.open }));
+  console.log(renderReview(stored.decisions ?? {}, { width, openOnly: flags.open, dismissed: stored.dismissed ?? {} }));
   console.log('');
 
-  const open = summarize(resolveDecisions({ mode: 'guided', answers: stored.decisions ?? {} })).open;
+  const s = summarize(
+    resolveDecisions({ mode: 'guided', answers: stored.decisions ?? {}, dismissed: stored.dismissed ?? {} }),
+  );
   console.log(
     theme.muted(
-      open > 0
+      s.open > 0
         ? '  `specframe decide` records the open ones.'
-        : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
+        : s.dismissed > 0
+          ? '  Every applicable decision is recorded; the rest were dismissed as not applicable.'
+          : '  Every decision in this catalog is recorded. Supersede one by editing its ADR.',
     ),
   );
 }
@@ -745,6 +806,18 @@ async function runRevise(cwd, version, flags) {
   if (flags.set) {
     const { valid, invalid } = validateAnswers(parseSetFlag(flags.set));
     reportInvalidAnswers(invalid);
+    // A dismissed decision is not "recorded" in the ordinary sense, but --set
+    // silently answering it would bypass `specframe restore` just the same —
+    // the whole point of a dismissal is that nothing decides it quietly.
+    for (const id of Object.keys(valid)) {
+      const dismissal = stored.dismissed[id];
+      if (!dismissal) continue;
+      console.warn(
+        theme.warn(`\nIgnoring ${id}: dismissed on ${dismissal.date}${dismissal.reason ? ` — ${dismissal.reason}` : ''}.`),
+      );
+      console.warn(theme.muted(`Run \`specframe restore ${id}\` first if that is no longer true.\n`));
+      delete valid[id];
+    }
     if (Object.keys(valid).length === 0) {
       throw new Error('--set named no decision this catalog knows. Nothing to revise.');
     }
@@ -806,8 +879,18 @@ async function runRevise(cwd, version, flags) {
   }
 
   const config = { ...stored, mode: 'guided', decisions, revisions };
-  const before = resolveDecisions({ mode: 'guided', answers: stored.decisions, provenance: stored.provenance });
-  const after = resolveDecisions({ mode: 'guided', answers: decisions, provenance: stored.provenance });
+  const before = resolveDecisions({
+    mode: 'guided',
+    answers: stored.decisions,
+    provenance: stored.provenance,
+    dismissed: stored.dismissed,
+  });
+  const after = resolveDecisions({
+    mode: 'guided',
+    answers: decisions,
+    provenance: stored.provenance,
+    dismissed: stored.dismissed,
+  });
   const effects = planRevisionEffects({ before, after });
 
   console.log('');
@@ -862,6 +945,193 @@ async function runRevise(cwd, version, flags) {
   );
 }
 
+function dismissWarning(id, entry) {
+  return (
+    theme.warn(`\n${id} is already recorded, in docs/adr/${entry.adr}-${entry.slug}.md.`) +
+    theme.muted('\nChange it with `specframe revise` instead — dismiss only applies to an open decision.')
+  );
+}
+
+/**
+ * Declare that a decision can never apply to this repository — every frontend
+ * decision in a backend-only service, say.
+ *
+ * Deliberately narrow: only a decision still *open* may be dismissed (an
+ * already-decided one is changed with `specframe revise` instead, which keeps
+ * the accepted ADR the single source of truth for what was chosen), and a
+ * gated-off decision is refused with the same wording `revise` already uses
+ * for the same situation. No ADR is written — see docs/DECISIONS.md's own
+ * explanation of why — so this reuses `decideTemplateSet` exactly as it is:
+ * new documents created, nothing existing touched, and the regenerable
+ * indexes (chiefly docs/DECISIONS.md) refreshed.
+ */
+async function runDismiss(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `dismiss` extends an existing scaffold.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+
+  let ids;
+  if (flags.group) {
+    if (!GROUPS.some((g) => g.id === flags.group)) {
+      throw new Error(`Unknown group: ${flags.group}\nGroups: ${GROUPS.map((g) => g.id).join(', ')}`);
+    }
+    ids = decisionsForGroup(flags.group)
+      .filter((d) => isRelevant(d, stored.decisions))
+      .filter((d) => stored.decisions[d.id] === undefined && stored.dismissed[d.id] === undefined)
+      .map((d) => d.id);
+    if (ids.length === 0) {
+      console.log(`Nothing to dismiss in "${flags.group}" — every decision there is already recorded or dismissed.`);
+      return;
+    }
+    // The high-blast-radius form — several decisions dismissed at once with
+    // one shared reason — needs the same explicit confirmation off a terminal
+    // that `init --yes`/`decide --yes` already require for an unreviewed,
+    // catalog-wide action.
+    if (!process.stdin.isTTY && !flags.yes) {
+      throw new Error(
+        `--group would dismiss ${ids.length} decisions at once: ${ids.join(', ')}.\n` +
+          'Pass --yes to confirm off a terminal.',
+      );
+    }
+  } else {
+    ids = (flags.target ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (ids.length === 0) {
+      throw new Error(
+        'Usage: specframe dismiss <id>[,<id>...] [--reason "..."]\n\n' +
+          'Or:    specframe dismiss --group <name> [--reason "..."]',
+      );
+    }
+  }
+
+  // Validated before anything is written, so a typo partway through a
+  // multi-id list cannot half-apply.
+  for (const id of ids) {
+    const decision = getDecision(id);
+    if (!decision) {
+      throw new Error(
+        `Unknown decision: ${id}\nRun \`specframe review\` to see the decisions this repository records.`,
+      );
+    }
+    if (stored.decisions[id] !== undefined) throw new Error(dismissWarning(id, decision));
+    if (!isRelevant(decision, stored.decisions)) {
+      throw new Error(
+        `${id} does not apply to this configuration — an earlier answer already retires it.\n` +
+          'Revise that answer first if you want to record something about it.',
+      );
+    }
+  }
+
+  const date = today();
+  const reason = flags.reason?.trim() || null;
+  const dismissed = { ...stored.dismissed };
+  for (const id of ids) dismissed[id] = { date, reason };
+
+  // Never flips `mode` — dismissing is not the same act as recording a
+  // decision, and a blank-mode repo dismissing its way through the frontend
+  // group should not suddenly gain the guided-mode worked examples it never
+  // asked for.
+  const config = { ...stored, dismissed };
+
+  if (flags.json) {
+    const actions = await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun, quiet: true });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          dismissed: ids,
+          reason,
+          files: actions.filter((a) => a.action !== 'up-to-date').map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log('');
+  await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+  console.log(
+    flags.dryRun
+      ? '\nDry run complete. Nothing was written.'
+      : `\n${theme.good(`Dismissed ${ids.length} decision${ids.length === 1 ? '' : 's'}.`)} ` +
+          theme.muted('No ADR was written — see docs/DECISIONS.md. `specframe restore <id>` reopens it.'),
+  );
+}
+
+/**
+ * Undo a dismissal: the decision returns to the open backlog, exactly as if
+ * it had never been dismissed. Reuses `decideTemplateSet` the same way
+ * `runDismiss` does — restoring writes nothing new, it only refreshes the
+ * regenerable indexes so the decision moves back to `## Open decisions`.
+ */
+async function runRestore(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `restore` reopens a decision it dismissed.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  const ids = (flags.target ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (ids.length === 0) {
+    throw new Error('Usage: specframe restore <id>[,<id>...]');
+  }
+
+  const notDismissed = ids.filter((id) => stored.dismissed[id] === undefined);
+  if (notDismissed.length > 0) {
+    throw new Error(
+      `Not dismissed, so nothing to restore: ${notDismissed.join(', ')}\n` +
+        'Run `specframe review` to see the decisions this repository records.',
+    );
+  }
+
+  const dismissed = { ...stored.dismissed };
+  for (const id of ids) delete dismissed[id];
+  const config = { ...stored, dismissed };
+
+  if (flags.json) {
+    const actions = await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun, quiet: true });
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          restored: ids,
+          files: actions.filter((a) => a.action !== 'up-to-date').map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log('');
+  await decideTemplateSet({ targetDir, ...config, version, dryRun: flags.dryRun });
+  console.log(
+    flags.dryRun
+      ? '\nDry run complete. Nothing was written.'
+      : `\n${theme.good(`Restored ${ids.length} decision${ids.length === 1 ? '' : 's'}.`)} ` +
+          theme.muted('Back in the open backlog — see docs/DECISIONS.md, or `specframe decide` to record it.'),
+  );
+}
+
 async function runUpdate(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
   const manifest = await readManifest(targetDir);
@@ -892,7 +1162,8 @@ async function runUpdate(cwd, version, flags) {
       console.log('\nCancelled. Nothing was written.');
       return;
     }
-    config = { ...answers, initDate: today() };
+    const initDate = today();
+    config = { ...answers, dismissed: stampDismissed(answers.dismissed ?? {}, initDate), initDate };
   }
 
   await updateTemplateSet({
@@ -907,7 +1178,7 @@ async function runUpdate(cwd, version, flags) {
   // not re-prompted: they surface in docs/DECISIONS.md, and `specframe decide`
   // is how you answer them.
   if (config.mode === 'guided') {
-    const resolved = resolveDecisions({ mode: 'guided', answers: config.decisions });
+    const resolved = resolveDecisions({ mode: 'guided', answers: config.decisions, dismissed: config.dismissed });
     const newOpen = resolved.open.filter((o) => isRelevant(o.decision, config.decisions));
     if (newOpen.length > 0) {
       console.log(
@@ -987,6 +1258,16 @@ export async function run(argv = process.argv.slice(2)) {
 
   if (command === 'revise') {
     await runRevise(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'dismiss') {
+    await runDismiss(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'restore') {
+    await runRestore(cwd, version, flags);
     return;
   }
 

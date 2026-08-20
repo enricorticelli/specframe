@@ -42,6 +42,7 @@ const CONTROL_KEYS = new Map([
   ['a', CONTROL.SKIP_ALL],
   ['d', CONTROL.DEFAULTS],
   ['b', CONTROL.BACK],
+  ['x', CONTROL.DISMISS],
   ['?', CONTROL.HELP],
   ['h', CONTROL.HELP],
   ['q', CONTROL.QUIT],

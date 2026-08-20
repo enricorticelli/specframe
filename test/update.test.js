@@ -225,6 +225,49 @@ test('an index with no recognisable section still falls back to a sibling', () =
   assert.equal(actionFor(actions, 'docs/rules/README.md').action, 'conflict');
 });
 
+test('a heading new to this version is inserted after the section that merged before it', () => {
+  // The real scenario a version upgrade produces: an existing file has every
+  // heading the version that wrote it knew about, but not the new one this
+  // version adds. It must not be treated as a restructure.
+  const BACKLOG = ['## Decisions taken', '## Open decisions', '## Decisions that do not apply'];
+  const disk =
+    '# Decisions\n\n## Decisions taken\n\nmine\n\n## Open decisions\n\nalso mine\n\n---\n\nfooter\n';
+  const planned =
+    '# Decisions\n\n## Decisions taken\n\ntheirs\n\n## Open decisions\n\nalso theirs\n\n' +
+    '## Decisions that do not apply\n\nnew section\n\n---\n\nfooter\n';
+
+  const merged = mergeGeneratedSections(disk, planned, BACKLOG);
+
+  assert.match(merged, /## Decisions taken\n\ntheirs/, 'existing sections still refresh');
+  assert.match(merged, /## Open decisions\n\nalso theirs/);
+  assert.match(
+    merged,
+    /## Open decisions\n\nalso theirs\n\n## Decisions that do not apply\n\nnew section\n\n---/,
+    'the new section lands right after the one before it, ahead of the footer',
+  );
+});
+
+test('a document matching none of several headings is still restructured beyond recognition, not partially merged', () => {
+  const BACKLOG = ['## Decisions taken', '## Open decisions'];
+  const planned = '## Decisions taken\n\ntheirs\n\n## Open decisions\n\nalso theirs\n';
+  assert.equal(mergeGeneratedSections('# My own notes\n', planned, BACKLOG), null);
+});
+
+test('a new leading heading with no earlier anchor is dropped rather than guessed at', () => {
+  // The one gap the insert-tolerance leaves open (see mergeGeneratedSections'
+  // doc comment): a section new to this version that comes *before* every
+  // heading the file already has has nowhere to anchor to, so it is left out
+  // — the merge still succeeds on the section that does match.
+  const HEADINGS = ['## New first section', '## Decisions taken'];
+  const disk = '# Decisions\n\n## Decisions taken\n\nmine\n';
+  const planned = '## New first section\n\nbrand new\n\n## Decisions taken\n\ntheirs\n';
+
+  const merged = mergeGeneratedSections(disk, planned, HEADINGS);
+
+  assert.doesNotMatch(merged, /New first section/, 'no anchor existed before it, so it is not inserted');
+  assert.match(merged, /## Decisions taken\n\ntheirs/, 'the section that does match still refreshes');
+});
+
 test('a stale manifest baseline no longer forces a conflict on a mergeable file', () => {
   // The regression: a run that skipped this file recorded the hash of the
   // content it did not write, so disk matched neither baseline nor plan.

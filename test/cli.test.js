@@ -9,9 +9,22 @@ test('the default command is init', () => {
 });
 
 test('commands are recognised', () => {
-  for (const command of ['init', 'decide', 'update', 'uninstall', 'help']) {
+  for (const command of ['init', 'decide', 'update', 'uninstall', 'help', 'dismiss', 'restore']) {
     assert.equal(parseArgs([command]).command, command);
   }
+});
+
+test('dismiss and restore take their id(s) as the command subject', () => {
+  assert.equal(parseArgs(['dismiss', 'rendering-strategy']).flags.target, 'rendering-strategy');
+  assert.equal(parseArgs(['dismiss', 'a,b,c']).flags.target, 'a,b,c');
+  assert.equal(parseArgs(['restore', 'rendering-strategy']).flags.target, 'rendering-strategy');
+});
+
+test('--reason and --group accept both --flag value and --flag=value', () => {
+  assert.equal(parseArgs(['dismiss', 'tdd', '--reason', 'no code yet']).flags.reason, 'no code yet');
+  assert.equal(parseArgs(['dismiss', 'tdd', '--reason=no code yet']).flags.reason, 'no code yet');
+  assert.equal(parseArgs(['dismiss', '--group', 'frontend']).flags.group, 'frontend');
+  assert.equal(parseArgs(['dismiss', '--group=frontend']).flags.group, 'frontend');
 });
 
 test('boolean flags parse in short and long form', () => {

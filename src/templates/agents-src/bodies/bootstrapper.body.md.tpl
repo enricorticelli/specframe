@@ -17,7 +17,7 @@ The job is **archaeology, not design**. Every decision in this repository was al
 2. `docs/adr/README.md` and every existing ADR — including any written before specframe, possibly under a different numbering.
 3. `docs/rules/README.md`, `docs/guidelines/README.md`, `docs/runbook/README.md`, `docs/glossary/README.md`.
 
-Anything already documented is **done**. Map an existing document to the catalog decision it covers and leave both alone — a second ADR for a decision that already has one is worse than no ADR at all.
+Anything already documented is **done**. Map an existing document to the catalog decision it covers and leave both alone — a second ADR for a decision that already has one is worse than no ADR at all. A decision already listed under "Decisions that do not apply" in `docs/DECISIONS.md` is done too: it was dismissed on purpose, so leave it alone unless you find it is now wrong (Step 2's "not applicable" bucket).
 
 ## Step 1 — Gather evidence
 
@@ -42,9 +42,10 @@ Sort every decision into exactly one bucket:
 
 - **Evidenced** — the code clearly follows one option. Record it.
 - **Partial** — followed in some places, not others. Record it, and say where it does not hold. This is the single most valuable thing you can produce: it is the decision the team believes it has made and hasn't.
-- **Unclear or absent** — no consistent signal. **Leave it open** and report it. Guessing here writes fiction into the file the whole repository is supposed to trust.
+- **Not applicable** — the decision presupposes something this repository does not have: no HTTP surface, no frontend, no message broker, no second service. Do **not** record it — propose a dismissal instead (Step 3a). Absence is a claim too: "no frontend code here" is evidence only if you looked, so say where you looked.
+- **Unclear or absent** — no consistent signal, and you cannot rule out that it applies. **Leave it open** and report it. Guessing here writes fiction into the file the whole repository is supposed to trust — and so does dismissing something you merely couldn't find evidence *for*, rather than evidence that it cannot apply.
 
-Never resolve a bucket by picking the recommended option. The recommendation describes a good default, not this codebase.
+Never resolve a bucket by picking the recommended option, and never resolve "unclear" by dismissing it either — a dismissal is a claim about this repository's shape, not a way to clear the backlog.
 
 ## Step 3 — Record what is evidenced
 
@@ -57,6 +58,16 @@ specframe decide --set <id>=<value>,<id>=<value> --detected
 `--detected` is what makes the ADRs honest: they state that they document an existing implementation, and they carry an empty **Evidence in this repository** section for you to fill.
 
 Do **not** hand-write an ADR for a decision that appears in `docs/DECISIONS.md`, and do not allocate your own numbers for one. If the CLI is unavailable, write the file at the reserved number from `docs/DECISIONS.md` and follow the structure of any existing generated ADR exactly.
+
+## Step 3a — Propose what does not apply
+
+A dismissal is a human judgement about scope, so you **propose** it and stop — never run `specframe dismiss` yourself. For each not-applicable decision, or a whole not-applicable section at once, hand back a copy-pasteable command with the evidence of absence as the reason:
+
+```
+specframe dismiss --group frontend --reason "no UI in this repo — no package.json UI deps, no .tsx/.vue/.svelte files, no static asset pipeline; checked src/, web/, public/, and the CI build steps"
+```
+
+If a gate question has a `none`-shaped option instead (`persistence: none`, `ui-surface: none`), prefer proposing that answer over dismissing its followers one by one: it retires the whole group at once and produces a real ADR, which a dismissal deliberately does not.
 
 ## Step 4 — Attach the evidence
 
@@ -75,16 +86,18 @@ Domain terms are almost always in this bucket, and are where a scan of an unfami
 
 ## Rules
 
-- Do not invent. No evidence means the decision stays open, or the section holds a short TODO.
-- Cite `path:line` for every claim. A finding without a citation is a guess.
+- Do not invent. No evidence means the decision stays open, or the section holds a short TODO. No evidence of *absence* means the same — do not dismiss a decision you simply could not find evidence for.
+- Cite `path:line` for every claim. A finding without a citation is a guess. For a proposed dismissal, cite where you looked for the thing that isn't there.
 - Never overwrite or rewrite a document the user wrote. Add only what is missing.
 - Never duplicate a decision that any existing document already covers.
 - Record what the code does, even when it contradicts good practice. The value of this log is that it is true.
 - Prefer few accurate entries over many speculative ones.
+- Never run `specframe dismiss` yourself. Propose it, with the evidence, and let the human run it.
 
 ## Output
 
 - Decisions recorded, with the evidence for each, grouped as evidenced or partial.
+- Dismissals proposed, each with the evidence of absence, as a copy-pasteable `specframe dismiss` command for the human to run.
 - Decisions left open, and what was ambiguous about them.
 - Existing documents you mapped to a catalog decision and therefore skipped.
 - Non-catalog documents drafted, by path.

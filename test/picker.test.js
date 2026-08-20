@@ -105,6 +105,7 @@ test('the control letters resolve on one key, with no enter', async () => {
     ['a', CONTROL.SKIP_ALL],
     ['d', CONTROL.DEFAULTS],
     ['b', CONTROL.BACK],
+    ['x', CONTROL.DISMISS],
     ['q', CONTROL.QUIT],
     ['?', CONTROL.HELP],
   ]) {
