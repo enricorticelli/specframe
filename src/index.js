@@ -19,8 +19,10 @@ import { askQuestions, askRevision, parseAgentTargets, renderReview } from './pr
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
 import { buildReview, diffAnswers, reviewToJSON } from './review.js';
 import { configureTheme, terminalWidth, theme, wrapText } from './style.js';
+import { createReadlineIo } from './tui.js';
 import {
   decideTemplateSet,
+  findExistingRootFiles,
   normalizeConfig,
   planRevisionEffects,
   recordLocalAdr,
@@ -175,6 +177,10 @@ Init options:
                       instead of presenting the choice as new. Use this when
                       documenting an existing repository — /specframe-bootstrap
                       does it for you.
+  -f, --force         If specframe is already installed here, re-run onboarding
+                      from scratch instead of pointing at update/decide. Also
+                      answers yes to overwriting AGENTS.md/CLAUDE.md/etc. that
+                      already exist from outside specframe, unattended.
 
 Decide options:
   -n, --dry-run    Show what would be written.
@@ -263,8 +269,67 @@ function logPlanSummary(resolved) {
   );
 }
 
+// `init` on a repo specframe already scaffolded used to re-run the whole wizard
+// from scratch and then quietly skip every file that already existed — correct
+// per file, but the run as a whole looked like onboarding into an empty repo
+// when it was really redundant with `update`/`decide`. Caught here, before any
+// question is asked, so a re-run points at the command that actually applies.
+function reportAlreadyInstalled(manifest) {
+  const stored = normalizeConfig(manifest.config);
+  console.log(
+    `${theme.warn('specframe is already installed here')} ` +
+      theme.muted(`(v${manifest.version ?? 'unknown'}, mode ${stored.mode}).`),
+  );
+  console.log(theme.muted('  `specframe update`  refreshes generated files for this version.'));
+  console.log(theme.muted('  `specframe decide`  records decisions still open.'));
+  console.log(theme.muted('  `specframe review`  shows what is recorded here.'));
+  console.log(theme.muted('\nRun `specframe init --force` to re-run onboarding from scratch anyway.'));
+}
+
+// AGENTS.md/CLAUDE.md/etc. that already exist here, from outside specframe —
+// most often a legacy project with its own AI-agent context files. `init` never
+// overwrites a file it did not create, so left unquestioned these are silently
+// skipped and specframe's pointers (docs/, ADRs, rules) end up unreachable from
+// whichever file an agent actually reads. Ask once, before the wizard runs,
+// rather than let that go by as a quiet `[skip]` line mid-run.
+async function confirmLegacyOverwrite({ targetDir, flags, unattended }) {
+  const found = await findExistingRootFiles(targetDir);
+  if (found.length === 0) return new Set();
+
+  const list = found.join(', ');
+  const plural = found.length === 1 ? 'it' : 'them';
+
+  if (unattended) {
+    if (flags.force) {
+      console.log(theme.warn(`\n--force: overwriting existing ${list}.`));
+      return new Set(found);
+    }
+    console.warn(theme.warn(`\nFound existing ${list} — kept as-is (specframe never overwrites a file it did not create).`));
+    console.warn(theme.muted(`Pass --force to overwrite ${plural} with specframe's templates instead.\n`));
+    return new Set();
+  }
+
+  console.log(`\n${theme.warn('Found file(s) specframe would normally create:')} ${theme.bold(list)}`);
+  console.log(
+    theme.muted(
+      '  Kept as-is by default. Overwriting replaces the content with specframe\'s\n' +
+        '  template — anything already written there is lost.',
+    ),
+  );
+  const io = createReadlineIo();
+  const raw = await io.question(`${theme.accent(theme.glyph.prompt)} Overwrite ${plural}? [y/N] `);
+  io.close();
+  return ['y', 'yes'].includes(raw.trim().toLowerCase()) ? new Set(found) : new Set();
+}
+
 async function runInit(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
+
+  const existingManifest = await readManifest(targetDir);
+  if (existingManifest?.config && !flags.force) {
+    reportAlreadyInstalled(existingManifest);
+    return;
+  }
 
   const sources = await collectAnswerSources({
     preset: flags.preset,
@@ -301,6 +366,8 @@ async function runInit(cwd, version, flags) {
         'Pass --mode blank for the template set, or --preset/--blueprint/--set/--yes to configure it.',
     );
   }
+
+  const overwrite = await confirmLegacyOverwrite({ targetDir, flags, unattended });
 
   let config;
   if (unattended) {
@@ -352,7 +419,7 @@ async function runInit(cwd, version, flags) {
   logPlanSummary(resolveDecisions({ mode: full.mode, answers: full.decisions }));
   console.log('');
 
-  await writeTemplateSet({ targetDir, ...full, version });
+  await writeTemplateSet({ targetDir, ...full, version, overwrite });
   console.log(`\n${theme.good('Done.')} Context files are ready in: ${theme.bold(targetDir)}`);
   console.log(theme.muted(`Run \`specframe review\` to see the decisions recorded here as a table.`));
   if (full.mode === 'blank') {

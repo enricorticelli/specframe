@@ -261,16 +261,31 @@ async function exists(filePath) {
   }
 }
 
-async function writeIfMissing(targetPath, content, targetDir) {
-  if (await exists(targetPath)) {
+async function writeIfMissing(targetPath, content, targetDir, { overwrite = false } = {}) {
+  const alreadyThere = await exists(targetPath);
+  if (alreadyThere && !overwrite) {
     console.log(`${actionTag('skip')}${theme.muted(path.relative(targetDir, targetPath))}`);
-    return false;
+    return { written: false, existed: true };
   }
 
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, content, 'utf8');
-  console.log(`${actionTag('write')}${path.relative(targetDir, targetPath)}`);
-  return true;
+  console.log(`${actionTag(alreadyThere ? 'update' : 'write')}${path.relative(targetDir, targetPath)}`);
+  return { written: true, existed: alreadyThere };
+}
+
+// Root-level files init would create — AGENTS.md, CLAUDE.md, the two .github
+// templates — that are already on disk in a repo specframe has never scaffolded.
+// Most often a legacy project with its own AI-agent context file: `init` never
+// overwrites a file it did not create, so left unquestioned these would just be
+// skipped, leaving specframe's pointers unreachable from whichever file an agent
+// actually reads. Checked up front so the CLI can ask instead of skipping quietly.
+export async function findExistingRootFiles(targetDir) {
+  const found = [];
+  for (const { target } of TEMPLATE_TARGETS) {
+    if (await exists(toAbsPath(targetDir, target))) found.push(target);
+  }
+  return found;
 }
 
 // Every body lives flat in agents-src/bodies/, named by `entry.body` when the
@@ -465,20 +480,24 @@ function toAbsPath(targetDir, relpath) {
 }
 
 export async function writeTemplateSet(rawConfig) {
-  const { targetDir, version } = rawConfig;
+  const { targetDir, version, overwrite = new Set() } = rawConfig;
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const previous = await readManifest(targetDir);
 
-  // A file already on disk is left alone, so it is reported as `skip-user`: the
-  // manifest must not claim specframe wrote whatever is in it.
+  // A file already on disk is left alone unless its relpath is in `overwrite`
+  // (the CLI asked, up front, whether to replace a pre-existing AGENTS.md/
+  // CLAUDE.md/etc.). Left alone, it is reported as `skip-user`: the manifest
+  // must not claim specframe wrote whatever is in it.
   const actions = [];
   for (const entry of plan) {
-    const written = await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir);
+    const { written, existed } = await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir, {
+      overwrite: overwrite.has(entry.relpath),
+    });
     actions.push({
       relpath: entry.relpath,
       managed: entry.managed,
-      action: written ? 'create' : 'skip-user',
+      action: written ? (existed ? 'overwrite' : 'create') : 'skip-user',
       ...(written ? { content: entry.content } : {}),
     });
   }
