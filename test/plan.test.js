@@ -291,3 +291,30 @@ test('rendering is deterministic for the same answers', async () => {
     b.map((e) => [e.relpath, e.content]),
   );
 });
+
+test('no target plans two entries for the same path', async () => {
+  // Codex renders a command and a skill of the same name to one path (it has no
+  // project-level prompts). Two entries for one path make every update
+  // overwrite the previous run's output with the other rendering, forever.
+  for (const target of ['claude', 'copilot', 'codex', 'gemini', 'continue', 'amazonq']) {
+    const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: [target] });
+    const seen = new Set();
+    for (const entry of plan) {
+      assert.ok(!seen.has(entry.relpath), `${target} plans ${entry.relpath} twice`);
+      seen.add(entry.relpath);
+    }
+  }
+});
+
+test('a codex skill whose name is also a command keeps the skill rendering', async () => {
+  const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: ['codex'] });
+  const conform = entryFor(plan, '.agents/skills/specframe-conform/SKILL.md');
+  assert.match(conform.content, /description: Auto-trigger on diff\/PR review/);
+  // …and it carries the dropped command rendering, so an older repo holding
+  // that on disk can be recognised as specframe's own output.
+  assert.equal(conform.alternates.length, 1);
+  assert.match(conform.alternates[0], /description: Review current changes/);
+
+  // A command with no skill of the same name is still shipped.
+  assert.ok(entryFor(plan, '.agents/skills/specframe-bootstrap/SKILL.md'), 'bootstrap kept');
+});

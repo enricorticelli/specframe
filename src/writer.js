@@ -314,17 +314,49 @@ async function buildAgentEntries({ targets, vars }) {
       entries.push({ relpath: adapter.agentPath(entry.name), content, managed: true });
     }
 
+    // A workflow shipped as both a command and a skill (specframe-decide,
+    // specframe-conform) is two files on Claude and one on Codex, whose
+    // commandPath *is* its skillPath — Codex has no project-level prompts. Two
+    // plan entries for one path is not a harmless duplicate: each `update`
+    // would find the other's content on disk, call it untouched-since-write,
+    // and overwrite it, so the file flip-flops on every run. The skill wins,
+    // being the auto-triggered form and what such a path has always ended up
+    // holding.
+    const skillRelpaths = adapter.skillPath
+      ? new Set(AGENT_TEMPLATES.skills.map((entry) => adapter.skillPath(entry.name)))
+      : new Set();
+
+    // What the dropped command entry would have rendered, per colliding path.
+    // Carried on the surviving entry as an `alternate`: a repo scaffolded before
+    // this collision was fixed has that rendering on disk under the other one's
+    // hash, which reads as "the user edited it" and yields the same conflict on
+    // every update, forever. Recognising specframe's own earlier output lets one
+    // update settle it. Never persisted — see manifestFromActions.
+    const alternates = new Map();
+
     for (const entry of AGENT_TEMPLATES.commands) {
+      const relpath = adapter.commandPath(entry.name);
       const body = await readBody(entry, vars);
       const content = adapter.renderCommand({ name: entry.name, description: entry.description, body });
-      entries.push({ relpath: adapter.commandPath(entry.name), content, managed: true });
+      if (skillRelpaths.has(relpath)) {
+        alternates.set(relpath, content);
+        continue;
+      }
+      entries.push({ relpath, content, managed: true });
     }
 
     if (adapter.skillPath) {
       for (const entry of AGENT_TEMPLATES.skills) {
+        const relpath = adapter.skillPath(entry.name);
         const body = await readBody(entry, vars);
         const content = adapter.renderSkill({ name: entry.name, description: entry.description, body });
-        entries.push({ relpath: adapter.skillPath(entry.name), content, managed: true });
+        const alternate = alternates.get(relpath);
+        entries.push({
+          relpath,
+          content,
+          managed: true,
+          ...(alternate !== undefined ? { alternates: [alternate] } : {}),
+        });
       }
     }
   }
@@ -909,4 +941,55 @@ async function pruneEmptyDirs(startDir, rootDir) {
     await rm(dir, { recursive: true, force: true });
     dir = path.dirname(dir);
   }
+}
+
+// --- agent harnesses added after onboarding ---------------------------------
+
+/**
+ * Add native support for one or more agent harnesses to a repository that is
+ * already scaffolded — the CLI half of `specframe agents add`.
+ *
+ * Deliberately narrower than `update`: the only files in scope are the ones the
+ * newly added targets contribute (`.claude/**`, `GEMINI.md`, …), computed as the
+ * difference between the plan for the merged target list and the plan for the
+ * one already recorded. Everything else — docs, ADRs, AGENTS.md — is left
+ * exactly as it stands, so adding a second harness can never rewrite prose
+ * written for the first.
+ *
+ * Only the fresh files' disk state is read, so the untouched remainder of the
+ * manifest cannot look like an orphan (see readDiskFiles / planUpdateActions).
+ *
+ * @param {string[]} previousTargets  the targets already recorded in the manifest.
+ */
+export async function addAgentTargets(rawConfig) {
+  const { targetDir, version, previousTargets = [], dryRun = false, force = false, quiet = false } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const manifest = await readManifest(targetDir);
+
+  const plan = await buildTemplatePlan(config);
+  const already = new Set(
+    (await buildTemplatePlan({ ...config, agentTargets: previousTargets })).map((entry) => entry.relpath),
+  );
+  const fresh = plan.filter((entry) => !already.has(entry.relpath));
+
+  const diskContents = await readDiskFiles(targetDir, fresh);
+  const actions = planUpdateActions({ plan: fresh, manifest, diskContents, force });
+
+  await applyActions({ targetDir, actions, dryRun, quiet });
+
+  if (!dryRun) {
+    const rendered = manifestFromActions({ plan: fresh, actions, previous: manifest, version, config });
+    // Merged into the manifest rather than replacing it: this run planned a
+    // handful of files, and manifestFromActions only knows about those. The
+    // recorded `version` stays as it was — `update` is what moves a repository
+    // to a new specframe version, and claiming it here would make it a no-op.
+    await writeManifest(targetDir, {
+      ...manifest,
+      version: manifest?.version ?? version,
+      config: { ...(manifest?.config ?? {}), agentTargets: config.agentTargets },
+      files: { ...(manifest?.files ?? {}), ...rendered.files },
+    });
+  }
+
+  return actions;
 }

@@ -321,3 +321,27 @@ test('--force rewrites a partly-written file whole', () => {
 
   assert.equal(actionFor(actions, relpath).action, 'overwrite');
 });
+
+test('disk holding an older rendering of the same entry is refreshed, not conflicted', () => {
+  // The Codex command/skill collision: the file on disk is specframe's own
+  // output, recorded under the hash of the rendering that no longer ships.
+  const plan = [{ relpath: 'a.md', content: 'skill', managed: true, alternates: ['command'] }];
+  const diskHashes = { 'a.md': sha256('command') };
+  const manifest = manifestOf({ 'a.md': { content: 'skill', managed: true } });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  const a = actionFor(actions, 'a.md');
+  assert.equal(a.action, 'overwrite');
+  assert.equal(a.content, 'skill');
+});
+
+test('an alternate does not excuse content the user actually wrote', () => {
+  const plan = [{ relpath: 'a.md', content: 'skill', managed: true, alternates: ['command'] }];
+  const diskHashes = { 'a.md': sha256('mine') };
+  const manifest = manifestOf({ 'a.md': { content: 'skill', managed: true } });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'a.md').action, 'conflict');
+});

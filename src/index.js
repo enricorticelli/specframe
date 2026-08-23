@@ -15,12 +15,22 @@ import { explainDecision } from './decisions/explain.js';
 import { PRESET_IDS, PRESETS } from './decisions/presets.js';
 import { resolveDecisions, summarize } from './decisions/resolve.js';
 import { readManifest } from './manifest.js';
-import { askQuestions, askRevision, parseAgentTargets, renderReview } from './prompts.js';
+import {
+  AGENT_TARGET_LIST,
+  agentTargetLabel,
+  askAgentTargets,
+  askQuestions,
+  askRevision,
+  parseAgentTargets,
+  renderReview,
+  splitAgentTargets,
+} from './prompts.js';
 import { findRepoRoot, isGitRepoRoot } from './repo.js';
 import { buildReview, diffAnswers, reviewToJSON } from './review.js';
 import { configureTheme, terminalWidth, theme, wrapText } from './style.js';
 import { createReadlineIo } from './tui.js';
 import {
+  addAgentTargets,
   decideTemplateSet,
   findExistingRootFiles,
   normalizeConfig,
@@ -141,6 +151,11 @@ Usage:
                                   frontend decision in a backend-only service,
                                   say. Leaves the open backlog with no ADR.
   specframe restore <id>         Undo a dismissal; the decision reopens.
+  specframe agents [add <ids>]   Add native files for another AI assistant
+                                  (Claude, Codex, …) to a repo already
+                                  scaffolded — or the first one, if none were
+                                  picked at init. With no argument, lists what
+                                  is configured and what can be added.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -242,6 +257,16 @@ the manifest only. \`specframe restore <id>\` undoes it.
 Restore options ('restore <id>[,<id>...]'):
   -n, --dry-run       Show what would be written, without writing it.
       --json          Print { restored, files } instead of a message.
+
+Agents options ('agents add <id>[,<id>...]', or just 'agents add' to pick from
+a list):
+      --agents LIST  Same list, as a flag: \`agents add --agents codex,gemini\`.
+  -n, --dry-run      Show what would be written, without writing it.
+  -f, --force        Rewrite one of this harness's files if you edited it.
+      --json         Print { added, agentTargets, files } instead of messages.
+Only ever adds: harnesses already configured are left alone (\`specframe update\`
+refreshes their files), and nothing outside the new harness's own files — no
+doc, no ADR, not AGENTS.md — is touched.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -1132,6 +1157,147 @@ async function runRestore(cwd, version, flags) {
   );
 }
 
+// Add native support for an agent harness to a repository that is already
+// scaffolded. Onboarding asks which assistants to generate files for exactly
+// once, and the answer ages badly: a team that picked Claude in March and adds
+// Codex in June had no way to get its files short of `init --force` (which
+// re-runs the whole wizard) or `uninstall`. This is that way — it only ever
+// adds, so it is equally the command for a repo where nothing was picked.
+async function runAgents(cwd, version, flags) {
+  const targetDir = await resolveTargetDir(cwd);
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${'.specframe/manifest.json'} in ${targetDir}.\n` +
+        'Run `specframe init` first — `agents` extends an existing scaffold.',
+    );
+  }
+
+  const stored = normalizeConfig(manifest.config);
+  const configured = stored.agentTargets;
+  const available = AGENT_TARGET_LIST.map((t) => t.value).filter((value) => !configured.includes(value));
+
+  // `agents` and `agents list` report; `agents add <ids>` and the bare
+  // `agents <ids>` shorthand write.
+  const sub = flags.target === 'add' ? 'add' : flags.target === 'list' || flags.target === undefined ? 'list' : 'add';
+  const rawList = flags.agents ?? (flags.target === 'add' ? flags.target2 : flags.target);
+
+  if (sub === 'list') {
+    reportAgentTargets({ configured, available });
+    return;
+  }
+
+  if (available.length === 0) {
+    console.log('Every agent harness specframe knows about is already configured here. Nothing to add.');
+    return;
+  }
+
+  let requested;
+  if (rawList) {
+    const { valid, unknown } = splitAgentTargets(rawList);
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown agent target(s): ${unknown.join(', ')}\n` +
+          `Expected any of: ${AGENT_TARGET_LIST.map((t) => t.value).join(', ')}.`,
+      );
+    }
+    requested = valid;
+  } else if (flags.yes || !process.stdin.isTTY) {
+    throw new Error(
+      'Which agent harness? Name one or more, e.g. `specframe agents add codex,gemini`.\n' +
+        `Still available here: ${available.join(', ')}.`,
+    );
+  } else {
+    requested = await askAgentTargets({ available });
+    if (requested === null || requested.length === 0) {
+      console.log(theme.muted('\nNothing selected. Nothing was written.'));
+      return;
+    }
+  }
+
+  const alreadyThere = requested.filter((value) => configured.includes(value));
+  if (alreadyThere.length > 0) {
+    console.warn(
+      theme.muted(`\nAlready configured here, left as they are: ${alreadyThere.join(', ')}.`),
+    );
+    console.warn(theme.muted('Run `specframe update` to refresh their files.\n'));
+  }
+  const added = requested.filter((value) => !configured.includes(value));
+  if (added.length === 0) {
+    console.log('Nothing to add.');
+    return;
+  }
+
+  const agentTargets = [...configured, ...added];
+  // Silent under --json: stdout belongs to the document a caller is parsing.
+  if (!flags.json) {
+    console.log(
+      `\nAdding ${added.map((value) => theme.bold(agentTargetLabel(value))).join(', ')} ` +
+        theme.muted(
+          `to ${configured.length > 0 ? `the ${configured.length} already configured here` : 'this repository'}.`,
+        ) +
+        '\n',
+    );
+  }
+
+  const actions = await addAgentTargets({
+    targetDir,
+    ...stored,
+    agentTargets,
+    previousTargets: configured,
+    version,
+    force: flags.force,
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(
+      JSON.stringify(
+        {
+          dryRun: flags.dryRun,
+          added,
+          agentTargets,
+          files: actions.map((a) => ({ relpath: a.relpath, action: a.action })),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (flags.dryRun) {
+    console.log('\nDry run complete. Nothing was written.');
+    return;
+  }
+  console.log(`\n${theme.good('Done.')} ${added.join(', ')} now read the same context as the rest of this repository.`);
+}
+
+function reportAgentTargets({ configured, available }) {
+  const label = (value) => {
+    const entry = AGENT_TARGET_LIST.find((t) => t.value === value);
+    return `  ${theme.bold(value.padEnd(10))}${theme.muted(entry ? entry.hint : '')}`;
+  };
+
+  if (configured.length === 0) {
+    console.log(theme.warn('No agent harness is configured in this repository.'));
+    console.log(theme.muted('AGENTS.md is generated regardless; these add each tool\'s native files on top.'));
+  } else {
+    console.log(theme.bold('Configured here:'));
+    for (const value of configured) console.log(label(value));
+  }
+
+  if (available.length === 0) {
+    console.log(theme.muted('\nEvery harness specframe knows about is configured here.'));
+    return;
+  }
+
+  console.log(`\n${theme.bold('Available to add:')}`);
+  for (const value of available) console.log(label(value));
+  console.log(theme.muted(`\nRun \`specframe agents add ${available[0]}\` (or with no argument, to pick from a list).`));
+}
+
 async function runUpdate(cwd, version, flags) {
   const targetDir = await resolveTargetDir(cwd);
   const manifest = await readManifest(targetDir);
@@ -1268,6 +1434,11 @@ export async function run(argv = process.argv.slice(2)) {
 
   if (command === 'restore') {
     await runRestore(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'agents') {
+    await runAgents(cwd, version, flags);
     return;
   }
 

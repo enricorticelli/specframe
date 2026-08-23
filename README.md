@@ -228,6 +228,22 @@ well and is correct only until the change lands. See
 
 **Agents that don't read `AGENTS.md`** get a thin native pointer instead: `GEMINI.md` (yours to extend), `.continue/rules/specframe.md` and `.amazonq/rules/specframe.md` (managed). One canonical source, one thing to maintain.
 
+### Adding an assistant later
+
+Onboarding asks once; the answer ages. `specframe agents` adds a harness to a repo
+that's already scaffolded — or the first one, if none was picked at init.
+
+```bash
+specframe agents                        # what's configured here, and what can be added
+specframe agents add codex,gemini       # write their native files
+specframe agents add                    # or pick from a list
+```
+
+It only ever adds: harnesses already configured are left alone (`specframe update`
+refreshes their files), and nothing outside the new harness's own files — no doc,
+no ADR, not `AGENTS.md` — is touched. A file you'd already written at one of those
+paths is kept, with the new version beside it as `<file>.specframe-new`.
+
 ---
 
 ## Deciding later

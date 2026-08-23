@@ -112,7 +112,7 @@ export function planUpdateActions({
   const planned = new Set();
 
   for (const entry of plan) {
-    const { relpath, content, managed, sections } = entry;
+    const { relpath, content, managed, sections, alternates } = entry;
     planned.add(relpath);
 
     const newHash = sha256(content);
@@ -138,7 +138,12 @@ export function planUpdateActions({
     // wrote around them.
     const untouchedSinceWrite = oldHash !== undefined && diskHash === oldHash;
     const wroteTheWholeFile = untouchedSinceWrite && manifest?.files?.[relpath]?.merged !== true;
-    if (managed && (force || wroteTheWholeFile)) {
+    // `alternates` are other renderings an older specframe wrote to this same
+    // path (see buildAgentEntries). Disk matching one of them is specframe's
+    // own output under a hash that no longer identifies it — not the user's
+    // work, so refreshing it loses nothing and stops the conflict recurring.
+    const isOwnStaleRendering = (alternates ?? []).some((text) => sha256(text) === diskHash);
+    if (managed && (force || wroteTheWholeFile || isOwnStaleRendering)) {
       actions.push({ relpath, managed, action: 'overwrite', content });
       continue;
     }

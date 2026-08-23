@@ -47,6 +47,14 @@ const AGENT_TARGETS = [
 
 const VALID_AGENT_TARGETS = new Set(AGENT_TARGETS.map((t) => t.value));
 
+// Exposed so `specframe agents` can list the harnesses, and name each one the
+// same way the wizard does, without a second copy of the table.
+export const AGENT_TARGET_LIST = AGENT_TARGETS;
+
+export function agentTargetLabel(value) {
+  return AGENT_TARGETS.find((t) => t.value === value)?.label ?? value;
+}
+
 const PACKAGE_MANAGERS = [
   { value: 'npm', label: 'npm', recommended: true },
   { value: 'pnpm', label: 'pnpm' },
@@ -96,6 +104,28 @@ export function parseAgentTargets(value) {
     .split(',')
     .map((token) => token.trim())
     .filter((token) => VALID_AGENT_TARGETS.has(token));
+}
+
+// Like parseAgentTargets, but reports what it could not use instead of
+// dropping it. `init --agents` can afford to ignore a typo — it is one flag
+// among many and the wizard's list is right there — but `agents add codexx` has
+// nothing else to do, and silently succeeding at nothing is the worst outcome.
+export function splitAgentTargets(value) {
+  const tokens = (value || '')
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  const valid = [];
+  const unknown = [];
+  for (const token of tokens) {
+    if (token === 'none') continue;
+    if (VALID_AGENT_TARGETS.has(token)) {
+      if (!valid.includes(token)) valid.push(token);
+    } else if (!unknown.includes(token)) {
+      unknown.push(token);
+    }
+  }
+  return { valid, unknown };
 }
 
 function sectionTitle(text, { width = terminalWidth() } = {}) {
@@ -252,6 +282,47 @@ async function askProjectBasics(io, seed) {
       : [];
 
   return { projectName, packageManager, agentTargets };
+}
+
+/**
+ * Pick harnesses to add to a repository that already has some — the interactive
+ * half of `specframe agents add`. Same picker as onboarding's, restricted to
+ * what is not configured here yet, and its own io because it is the whole
+ * session rather than one screen inside the wizard.
+ *
+ * @param {string[]} available  target values still addable, in catalog order.
+ * @returns {string[]|null} the chosen values, or null when the user quit.
+ */
+export async function askAgentTargets({ available }) {
+  const options = AGENT_TARGETS.filter((target) => available.includes(target.value));
+  const width = terminalWidth();
+  const io = createReadlineIo();
+  try {
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle('Agent assistants to add', { width }),
+        ...wrapText(
+          'Each one adds that tool\'s native files, pointing at the AGENTS.md and docs/ already in this repository. Pick any number.',
+          width,
+          '  ',
+        ).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options,
+      multi: true,
+      keys: [['1,2', 'pick several'], ['enter', 'cancel'], ['?', 'what each one gets']],
+      pickerKeys: [
+        [MOVE_KEY(), 'move'],
+        ['space', 'mark'],
+        ['enter', 'cancel'],
+        ['?', 'what each one gets'],
+      ],
+      help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+    });
+    return choice.kind === CONTROL.SELECT ? choice.values.map((n) => options[n - 1].value) : null;
+  } finally {
+    io.close();
+  }
 }
 
 async function askMode(io) {
