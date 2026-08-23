@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { sha256 } from '../src/manifest.js';
-import { mergeGeneratedSections, planUpdateActions } from '../src/update.js';
+import { mergeGeneratedSections, planAgentRemoval, planUpdateActions } from '../src/update.js';
 
 // Helpers -------------------------------------------------------------------
 
@@ -320,4 +320,68 @@ test('--force rewrites a partly-written file whole', () => {
   const actions = planUpdateActions({ plan, manifest, diskContents: { [relpath]: disk }, force: true });
 
   assert.equal(actionFor(actions, relpath).action, 'overwrite');
+});
+
+test('disk holding an older rendering of the same entry is refreshed, not conflicted', () => {
+  // The Codex command/skill collision: the file on disk is specframe's own
+  // output, recorded under the hash of the rendering that no longer ships.
+  const plan = [{ relpath: 'a.md', content: 'skill', managed: true, alternates: ['command'] }];
+  const diskHashes = { 'a.md': sha256('command') };
+  const manifest = manifestOf({ 'a.md': { content: 'skill', managed: true } });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  const a = actionFor(actions, 'a.md');
+  assert.equal(a.action, 'overwrite');
+  assert.equal(a.content, 'skill');
+});
+
+test('an alternate does not excuse content the user actually wrote', () => {
+  const plan = [{ relpath: 'a.md', content: 'skill', managed: true, alternates: ['command'] }];
+  const diskHashes = { 'a.md': sha256('mine') };
+  const manifest = manifestOf({ 'a.md': { content: 'skill', managed: true } });
+
+  const actions = planUpdateActions({ plan, manifest, diskHashes });
+
+  assert.equal(actionFor(actions, 'a.md').action, 'conflict');
+});
+
+test('dropping a harness removes what specframe wrote and keeps what it did not', () => {
+  const manifest = manifestOf({
+    'managed-untouched.md': { content: 'generated', managed: true },
+    'managed-edited.md': { content: 'generated', managed: true },
+    'mine.md': { content: 'generated', managed: false },
+  });
+  const diskHashes = {
+    'managed-untouched.md': sha256('generated'),
+    'managed-edited.md': sha256('mine now'),
+    'mine.md': sha256('mine now'),
+    // 'gone.md' is absent from disk entirely
+  };
+
+  const actions = planAgentRemoval({
+    relpaths: ['managed-untouched.md', 'managed-edited.md', 'mine.md', 'gone.md'],
+    manifest,
+    diskHashes,
+  });
+
+  assert.equal(actionFor(actions, 'managed-untouched.md').action, 'orphan-remove');
+  assert.equal(actionFor(actions, 'managed-edited.md').action, 'orphan');
+  assert.equal(actionFor(actions, 'mine.md').action, 'skip-user');
+  assert.equal(
+    actions.find((a) => a.relpath === 'gone.md'),
+    undefined,
+    'a file that is not there needs no action',
+  );
+});
+
+test('a path the manifest never recorded is treated as specframe\'s own', () => {
+  // Written before ownership was tracked, or by a run that wrote no manifest.
+  // Assuming it is the user's would leave harness files behind forever.
+  const actions = planAgentRemoval({
+    relpaths: ['a.md'],
+    manifest: { files: {} },
+    diskHashes: { 'a.md': sha256('whatever') },
+  });
+  assert.equal(actionFor(actions, 'a.md').action, 'orphan');
 });

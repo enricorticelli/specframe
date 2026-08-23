@@ -47,6 +47,14 @@ const AGENT_TARGETS = [
 
 const VALID_AGENT_TARGETS = new Set(AGENT_TARGETS.map((t) => t.value));
 
+// Exposed so `specframe agents` can list the harnesses, and name each one the
+// same way the wizard does, without a second copy of the table.
+export const AGENT_TARGET_LIST = AGENT_TARGETS;
+
+export function agentTargetLabel(value) {
+  return AGENT_TARGETS.find((t) => t.value === value)?.label ?? value;
+}
+
 const PACKAGE_MANAGERS = [
   { value: 'npm', label: 'npm', recommended: true },
   { value: 'pnpm', label: 'pnpm' },
@@ -96,6 +104,28 @@ export function parseAgentTargets(value) {
     .split(',')
     .map((token) => token.trim())
     .filter((token) => VALID_AGENT_TARGETS.has(token));
+}
+
+// Like parseAgentTargets, but reports what it could not use instead of
+// dropping it. `init --agents` can afford to ignore a typo — it is one flag
+// among many and the wizard's list is right there — but `agents add codexx` has
+// nothing else to do, and silently succeeding at nothing is the worst outcome.
+export function splitAgentTargets(value) {
+  const tokens = (value || '')
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  const valid = [];
+  const unknown = [];
+  for (const token of tokens) {
+    if (token === 'none') continue;
+    if (VALID_AGENT_TARGETS.has(token)) {
+      if (!valid.includes(token)) valid.push(token);
+    } else if (!unknown.includes(token)) {
+      unknown.push(token);
+    }
+  }
+  return { valid, unknown };
 }
 
 function sectionTitle(text, { width = terminalWidth() } = {}) {
@@ -252,6 +282,81 @@ async function askProjectBasics(io, seed) {
       : [];
 
   return { projectName, packageManager, agentTargets };
+}
+
+/**
+ * The one-choice menu `specframe` shows when the repository it is run in is
+ * already scaffolded. Built by the caller from what this repo actually has, so
+ * the list never offers revising decisions in a repo with none.
+ *
+ * @param {{value: string, label: string, hint?: string}[]} options
+ * @param {string[]} preamble  lines shown above the list, already sentence-shaped.
+ * @returns {string|null} the chosen value, or null when the user quit.
+ */
+export async function askMenu({ title, preamble = [], options, io = createReadlineIo() }) {
+  const width = terminalWidth();
+  try {
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle(title, { width }),
+        ...preamble.flatMap((line) => wrapText(line, width, '  ')).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options,
+      // Enter means different things on the two surfaces and is labelled as
+      // each: it runs the highlighted row in the picker, and there is no
+      // highlighted row when the list is typed at.
+      keys: [['1', 'pick one'], ['q', 'quit'], ['?', 'what each one does']],
+      pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'run it'], ['q', 'quit'], ['?', 'what each one does']],
+      help: options.map((option) => `${option.label}\n  ${option.hint ?? ''}`.trimEnd()).join('\n\n'),
+    });
+    return choice.kind === CONTROL.SELECT ? options[choice.values[0] - 1].value : null;
+  } finally {
+    io.close();
+  }
+}
+
+/**
+ * Pick harnesses to add to a repository that already has some — the interactive
+ * half of `specframe agents add`. Same picker as onboarding's, restricted to
+ * what is not configured here yet, and its own io because it is the whole
+ * session rather than one screen inside the wizard.
+ *
+ * @param {string[]} available  target values still addable, in catalog order.
+ * @returns {string[]|null} the chosen values, or null when the user quit.
+ */
+export async function askAgentTargets({ available, verb = 'add', io = createReadlineIo() }) {
+  const options = AGENT_TARGETS.filter((target) => available.includes(target.value));
+  const width = terminalWidth();
+  const blurb =
+    verb === 'remove'
+      ? 'Each one drops that tool\'s native files. AGENTS.md, docs/ and the decision log stay exactly as they are. Pick any number.'
+      : 'Each one adds that tool\'s native files, pointing at the AGENTS.md and docs/ already in this repository. Pick any number.';
+  try {
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle(verb === 'remove' ? 'Agent assistants to remove' : 'Agent assistants to add', { width }),
+        ...wrapText(blurb, width, '  ').map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options,
+      multi: true,
+      keys: [['1,2', 'pick several'], ['enter', 'cancel'], ['?', 'what each one gets']],
+      pickerKeys: [
+        [MOVE_KEY(), 'move'],
+        ['space', 'mark'],
+        ['enter', 'cancel'],
+        ['?', 'what each one gets'],
+      ],
+      help:
+        verb === 'remove'
+          ? 'Only that tool\'s own files go. A managed file you edited by hand is kept, and so is a file that is yours to own (GEMINI.md) — the report names them.'
+          : 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+    });
+    return choice.kind === CONTROL.SELECT ? choice.values.map((n) => options[n - 1].value) : null;
+  } finally {
+    io.close();
+  }
 }
 
 async function askMode(io) {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
-import { planUpdateActions, planUninstallActions } from './update.js';
+import { planAgentRemoval, planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
 import { LOCAL_ADR_MIN, LOCAL_ADR_STEP, getDecision } from './decisions/catalog.js';
 import { pad, theme } from './style.js';
@@ -314,17 +314,49 @@ async function buildAgentEntries({ targets, vars }) {
       entries.push({ relpath: adapter.agentPath(entry.name), content, managed: true });
     }
 
+    // A workflow shipped as both a command and a skill (specframe-decide,
+    // specframe-conform) is two files on Claude and one on Codex, whose
+    // commandPath *is* its skillPath — Codex has no project-level prompts. Two
+    // plan entries for one path is not a harmless duplicate: each `update`
+    // would find the other's content on disk, call it untouched-since-write,
+    // and overwrite it, so the file flip-flops on every run. The skill wins,
+    // being the auto-triggered form and what such a path has always ended up
+    // holding.
+    const skillRelpaths = adapter.skillPath
+      ? new Set(AGENT_TEMPLATES.skills.map((entry) => adapter.skillPath(entry.name)))
+      : new Set();
+
+    // What the dropped command entry would have rendered, per colliding path.
+    // Carried on the surviving entry as an `alternate`: a repo scaffolded before
+    // this collision was fixed has that rendering on disk under the other one's
+    // hash, which reads as "the user edited it" and yields the same conflict on
+    // every update, forever. Recognising specframe's own earlier output lets one
+    // update settle it. Never persisted — see manifestFromActions.
+    const alternates = new Map();
+
     for (const entry of AGENT_TEMPLATES.commands) {
+      const relpath = adapter.commandPath(entry.name);
       const body = await readBody(entry, vars);
       const content = adapter.renderCommand({ name: entry.name, description: entry.description, body });
-      entries.push({ relpath: adapter.commandPath(entry.name), content, managed: true });
+      if (skillRelpaths.has(relpath)) {
+        alternates.set(relpath, content);
+        continue;
+      }
+      entries.push({ relpath, content, managed: true });
     }
 
     if (adapter.skillPath) {
       for (const entry of AGENT_TEMPLATES.skills) {
+        const relpath = adapter.skillPath(entry.name);
         const body = await readBody(entry, vars);
         const content = adapter.renderSkill({ name: entry.name, description: entry.description, body });
-        entries.push({ relpath: adapter.skillPath(entry.name), content, managed: true });
+        const alternate = alternates.get(relpath);
+        entries.push({
+          relpath,
+          content,
+          managed: true,
+          ...(alternate !== undefined ? { alternates: [alternate] } : {}),
+        });
       }
     }
   }
@@ -842,7 +874,11 @@ function reportAction(action, dryRun) {
   if (action.action === 'conflict') suffix = ` ${theme.glyph.arrow} wrote ${action.relpath}.specframe-new (yours kept)`;
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
   if (action.action === 'orphan') suffix = ' (no longer generated — edited by hand, so kept; remove it yourself if unused)';
-  if (action.action === 'orphan-remove') suffix = ' (no longer generated — never edited, so removed)';
+  if (action.action === 'orphan-remove') {
+    suffix = action.forced
+      ? ' (no longer generated — removed as asked)'
+      : ' (no longer generated — never edited, so removed)';
+  }
   console.log(`${actionTag(label, { dryRun })}${action.relpath}${theme.muted(suffix)}`);
 }
 
@@ -909,4 +945,138 @@ async function pruneEmptyDirs(startDir, rootDir) {
     await rm(dir, { recursive: true, force: true });
     dir = path.dirname(dir);
   }
+}
+
+// --- agent harnesses added after onboarding ---------------------------------
+
+/**
+ * Add native support for one or more agent harnesses to a repository that is
+ * already scaffolded — the CLI half of `specframe agents add`.
+ *
+ * Deliberately narrower than `update`: the only files in scope are the ones the
+ * newly added targets contribute (`.claude/**`, `GEMINI.md`, …), computed as the
+ * difference between the plan for the merged target list and the plan for the
+ * one already recorded. Everything else — docs, ADRs, AGENTS.md — is left
+ * exactly as it stands, so adding a second harness can never rewrite prose
+ * written for the first.
+ *
+ * Only the fresh files' disk state is read, so the untouched remainder of the
+ * manifest cannot look like an orphan (see readDiskFiles / planUpdateActions).
+ *
+ * @param {string[]} previousTargets  the targets already recorded in the manifest.
+ */
+export async function addAgentTargets(rawConfig) {
+  const { targetDir, version, previousTargets = [], dryRun = false, force = false, quiet = false } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const manifest = await readManifest(targetDir);
+
+  const plan = await buildTemplatePlan(config);
+  const already = new Set(
+    (await buildTemplatePlan({ ...config, agentTargets: previousTargets })).map((entry) => entry.relpath),
+  );
+  const fresh = plan.filter((entry) => !already.has(entry.relpath));
+
+  const diskContents = await readDiskFiles(targetDir, fresh);
+  const actions = planUpdateActions({ plan: fresh, manifest, diskContents, force });
+
+  await applyActions({ targetDir, actions, dryRun, quiet });
+
+  if (!dryRun) {
+    const rendered = manifestFromActions({ plan: fresh, actions, previous: manifest, version, config });
+    // Merged into the manifest rather than replacing it: this run planned a
+    // handful of files, and manifestFromActions only knows about those. The
+    // recorded `version` stays as it was — `update` is what moves a repository
+    // to a new specframe version, and claiming it here would make it a no-op.
+    await writeManifest(targetDir, {
+      ...manifest,
+      version: manifest?.version ?? version,
+      config: { ...(manifest?.config ?? {}), agentTargets: config.agentTargets },
+      files: { ...(manifest?.files ?? {}), ...rendered.files },
+    });
+  }
+
+  return actions;
+}
+
+/**
+ * Drop native support for one or more agent harnesses from a repository — the
+ * CLI half of `specframe agents remove`.
+ *
+ * The mirror of addAgentTargets, and narrow in the same way: the files in scope
+ * are exactly the ones the dropped targets contributed, computed as the
+ * difference between the plan before and the plan after. AGENTS.md and docs/
+ * are untouched, so the repository keeps its whole decision log — it just stops
+ * shipping that tool's native files. Removing the last one is a supported
+ * position: AGENTS.md alone covers most tools.
+ *
+ * @param {string[]} previousTargets  the targets recorded in the manifest.
+ * @param {boolean} purge  also remove the harness's user-owned file (GEMINI.md).
+ * @param {boolean} force  also remove a managed file that was edited by hand.
+ */
+export async function removeAgentTargets(rawConfig) {
+  const {
+    targetDir,
+    previousTargets = [],
+    dryRun = false,
+    purge = false,
+    force = false,
+    quiet = false,
+  } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const manifest = await readManifest(targetDir);
+
+  const keptRelpaths = new Set((await buildTemplatePlan(config)).map((entry) => entry.relpath));
+  const before = await buildTemplatePlan({ ...config, agentTargets: previousTargets });
+  // A path the remaining targets still produce is not this harness's to remove
+  // — nothing shares one today, but the set difference is what makes that a
+  // property of the code rather than of the adapter table.
+  const gone = before.filter((entry) => !keptRelpaths.has(entry.relpath));
+
+  const diskContents = await readDiskFiles(targetDir, gone);
+  const actions = planAgentRemoval({
+    relpaths: gone.map((entry) => entry.relpath),
+    manifest,
+    diskContents,
+    purge,
+    force,
+  });
+
+  await applyActions({ targetDir, actions, dryRun, quiet });
+
+  // A `<file>.specframe-new` beside a file that just went is specframe's own
+  // output for a document that no longer exists — nothing left to merge it
+  // into, so it goes too rather than sitting there as litter.
+  if (!dryRun) {
+    for (const action of actions) {
+      if (action.action !== 'orphan-remove') continue;
+      const pending = `${toAbsPath(targetDir, action.relpath)}.specframe-new`;
+      if (!(await exists(pending))) continue;
+      await rm(pending, { force: true });
+      await pruneEmptyDirs(path.dirname(pending), targetDir);
+    }
+  }
+
+  if (!dryRun) {
+    const files = { ...(manifest?.files ?? {}) };
+    // A file that is really gone leaves the manifest with it. One kept — edited
+    // by hand, or user-owned — stays tracked, so `uninstall` still knows about
+    // it and `update` can go on reporting it as an orphan.
+    for (const action of actions) {
+      if (action.action === 'orphan-remove') delete files[action.relpath];
+    }
+    // A path that was never on disk is absent from `actions` entirely; it has
+    // no business staying in the manifest either.
+    const acted = new Set(actions.map((action) => action.relpath));
+    for (const entry of gone) {
+      if (!acted.has(entry.relpath)) delete files[entry.relpath];
+    }
+
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...(manifest?.config ?? {}), agentTargets: config.agentTargets },
+      files,
+    });
+  }
+
+  return actions;
 }
