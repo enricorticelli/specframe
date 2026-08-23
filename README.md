@@ -23,9 +23,8 @@ Most repos accumulate context by accident — a `CLAUDE.md` here, an `AGENTS.md`
 **specframe flips that around.** It scaffolds a decision-first structure in seconds and wires every agent's tooling to it: your decisions, rules, conventions, runbooks and glossary *are* the source of truth.
 
 - 🎯 **Decision-driven.** ADRs capture *what & why*, rules *what's non-negotiable*, guidelines *how you build*. Agents read intent instead of reverse-engineering it.
-- 🧭 **Three ways in.** A **blank** log with every template; a **guided** pass where each answer becomes an ADR plus the rules it implies; or a **blueprint** — the architecture you already have in mind, walked as that same pass. Skip a section with one key; what you skip stays tracked as open.
+- 🧭 **Three ways in.** A **blank** log with every template; a **guided** pass where each answer becomes an ADR plus the rules it implies; or a **blueprint** — the architecture you already have in mind, walked as that same pass. Skip a section with one key; what you skip stays open.
 - 🏗️ **Works on existing repos.** `/specframe-bootstrap` reconstructs the log from code you already shipped, citing `path:line` and leaving what it can't prove open.
-
 - 📌 **One source of truth.** `AGENTS.md` + `docs/` are canonical; every agent's native config points back at them. Claude, Copilot and Codex get subagents, commands and skills in each tool's *current* convention; Cursor, Windsurf, Zed, Roo Code, Kiro, Junie, Devin and Jules read `AGENTS.md` natively.
 - 🧩 **Complements your spec/plan harness** rather than competing with it: specframe owns the layer Spec Kit, BMAD and OpenSpec leave empty — [the decision that outlives the change](#working-alongside-a-specplan-harness).
 - 🛡️ **Safe by design.** Idempotent, re-runnable, zero dependencies, and it **never overwrites your files**: a manifest tracks what was generated, so updates stay surgical.
@@ -237,7 +236,7 @@ specframe decide --yes -n                     # preview taking every recommendat
 
 Nothing on disk moves, and a document's number comes from the catalog rather than the order you answered in: `R-0090` is `R-0090` whether written on day one or a year later. `decide` shows the same review table with recorded decisions dimmed — they're context, superseded by editing their ADR or by `specframe revise`, never by re-answering them here.
 
-Your documents are never overwritten. The one thing rewritten is the generated part of an index — the `## Index` table, `DECISIONS.md`'s three decision lists — refreshed in place, so your prose around it survives.
+Your documents are never overwritten. The one thing rewritten is an index's generated part — the `## Index` table, `DECISIONS.md`'s three lists — refreshed in place, so your prose around it survives.
 
 ### Deciding with an agent, not a wizard
 
