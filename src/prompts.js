@@ -285,6 +285,38 @@ async function askProjectBasics(io, seed) {
 }
 
 /**
+ * The one-choice menu `specframe` shows when the repository it is run in is
+ * already scaffolded. Built by the caller from what this repo actually has, so
+ * the list never offers revising decisions in a repo with none.
+ *
+ * @param {{value: string, label: string, hint?: string}[]} options
+ * @param {string[]} preamble  lines shown above the list, already sentence-shaped.
+ * @returns {string|null} the chosen value, or null when the user quit.
+ */
+export async function askMenu({ title, preamble = [], options, io = createReadlineIo() }) {
+  const width = terminalWidth();
+  try {
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle(title, { width }),
+        ...preamble.flatMap((line) => wrapText(line, width, '  ')).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options,
+      // Enter means different things on the two surfaces and is labelled as
+      // each: it runs the highlighted row in the picker, and there is no
+      // highlighted row when the list is typed at.
+      keys: [['1', 'pick one'], ['q', 'quit'], ['?', 'what each one does']],
+      pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'run it'], ['q', 'quit'], ['?', 'what each one does']],
+      help: options.map((option) => `${option.label}\n  ${option.hint ?? ''}`.trimEnd()).join('\n\n'),
+    });
+    return choice.kind === CONTROL.SELECT ? options[choice.values[0] - 1].value : null;
+  } finally {
+    io.close();
+  }
+}
+
+/**
  * Pick harnesses to add to a repository that already has some — the interactive
  * half of `specframe agents add`. Same picker as onboarding's, restricted to
  * what is not configured here yet, and its own io because it is the whole
@@ -293,10 +325,9 @@ async function askProjectBasics(io, seed) {
  * @param {string[]} available  target values still addable, in catalog order.
  * @returns {string[]|null} the chosen values, or null when the user quit.
  */
-export async function askAgentTargets({ available }) {
+export async function askAgentTargets({ available, io = createReadlineIo() }) {
   const options = AGENT_TARGETS.filter((target) => available.includes(target.value));
   const width = terminalWidth();
-  const io = createReadlineIo();
   try {
     const choice = await askChoice(io, {
       preamble: [

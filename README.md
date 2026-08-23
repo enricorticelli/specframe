@@ -246,6 +246,31 @@ paths is kept, with the new version beside it as `<file>.specframe-new`.
 
 ---
 
+## Running it again
+
+In a repo specframe already scaffolded, bare `specframe` opens a menu of what
+applies *there* — built from the repo's own state, so it never offers revising a
+decision in a repo that has recorded none, or an assistant already configured.
+
+```
+── specframe ───────────────────────────────────────────────────────────────────
+  specframe 0.8.0 is installed here, in guided mode. 12 recorded, 40 open.
+  Run `specframe init --force` to re-run onboarding from scratch instead.
+
+  1) Record decisions still open (40)
+  2) Review what is recorded here
+  3) Change a decision already recorded (12)
+  4) Add an AI assistant (4 available)
+  5) Refresh generated files
+  6) Remove what specframe created
+```
+
+One action per run — each of these is a session of its own. Off a terminal
+(CI, a pipe, an agent) it prints the commands that apply instead, so nothing
+that used to be scriptable stops being.
+
+---
+
 ## Deciding later
 
 ```bash

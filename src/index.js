@@ -19,6 +19,7 @@ import {
   AGENT_TARGET_LIST,
   agentTargetLabel,
   askAgentTargets,
+  askMenu,
   askQuestions,
   askRevision,
   parseAgentTargets,
@@ -139,7 +140,9 @@ function describeBlueprint(blueprint) {
 const HELP = `specframe — decision-driven scaffolding for AI-ready repositories.
 
 Usage:
-  specframe [init] [options]     Scaffold context files at the repo root.
+  specframe [init] [options]     Scaffold context files at the repo root. In a
+                                  repo specframe already scaffolded, opens a
+                                  menu of what applies there instead.
   specframe decide [options]     Record decisions still open in this repo.
   specframe review [options]     Show the decisions recorded here, as a table.
   specframe explain <id>         Show one decision's brief: question, context,
@@ -346,7 +349,119 @@ function reportAlreadyInstalled(manifest) {
   console.log(theme.muted('  `specframe update`  refreshes generated files for this version.'));
   console.log(theme.muted('  `specframe decide`  records decisions still open.'));
   console.log(theme.muted('  `specframe review`  shows what is recorded here.'));
+  console.log(theme.muted('  `specframe agents`  adds another AI assistant.'));
   console.log(theme.muted('\nRun `specframe init --force` to re-run onboarding from scratch anyway.'));
+}
+
+// What `specframe` does when the repository is already scaffolded and there is
+// somebody at the terminal: offer the operations that apply *here*, rather than
+// print the three commands it used to name and exit. The list is built from
+// this repo's own state — no "revise a decision" in a repo that has recorded
+// none, no "add an assistant" once all six are configured — because a menu
+// listing what cannot be done is how a menu becomes something to read past.
+//
+// One action per run, deliberately: each of these is a session of its own
+// (`decide` walks the catalog, `update` rewrites files), and dropping back into
+// a menu afterwards would bury what just happened.
+async function runInstalledMenu(cwd, version, flags, manifest) {
+  const { options, preamble } = buildInstalledMenu({ manifest, version });
+
+  const chosen = await askMenu({ title: 'specframe', preamble, options });
+  if (chosen === null) {
+    console.log(theme.muted('\nNothing to do.'));
+    return;
+  }
+
+  if (chosen === 'decide') return runDecide(cwd, version, flags);
+  if (chosen === 'review') return runReview(cwd, flags);
+  if (chosen === 'revise') return runRevise(cwd, version, flags);
+  // The menu is the interactive surface, so `agents` gets its picker rather
+  // than the list-of-ids form the flag-driven command takes.
+  if (chosen === 'agents') return runAgents(cwd, version, { ...flags, target: 'add', target2: undefined });
+  if (chosen === 'update') return runUpdate(cwd, version, flags);
+
+  // Uninstall is one keystroke from the top of a menu, unlike `specframe
+  // uninstall` which somebody had to type — so it asks first.
+  console.log(
+    theme.muted(
+      flags.purge
+        ? '\n--purge: your docs, ADRs and CLAUDE.md go too.'
+        : '\nManaged files are removed; docs/, ADRs and CLAUDE.md are kept (--purge removes those too).',
+    ),
+  );
+  const io = createReadlineIo();
+  const raw = await io.question(`${theme.accent(theme.glyph.prompt)} Remove specframe from this repository? [y/N] `);
+  io.close();
+  if (!['y', 'yes'].includes(raw.trim().toLowerCase())) {
+    console.log(theme.muted('\nCancelled. Nothing was removed.'));
+    return;
+  }
+  console.log('');
+  return runUninstall(cwd, flags);
+}
+
+// The menu's rows and the state line above them, from a manifest alone — pure,
+// so what the list offers in which repository is a test rather than a claim.
+export function buildInstalledMenu({ manifest, version }) {
+  const stored = normalizeConfig(manifest.config);
+  const resolved = resolveDecisions({
+    mode: 'guided',
+    answers: stored.decisions,
+    dismissed: stored.dismissed,
+  });
+  const open = resolved.open.filter((entry) => isRelevant(entry.decision, stored.decisions)).length;
+  const decided = Object.keys(stored.decisions).length;
+  const addableAgents = AGENT_TARGET_LIST.map((t) => t.value).filter(
+    (value) => !stored.agentTargets.includes(value),
+  );
+  const stale = manifest.version !== undefined && manifest.version !== version;
+
+  const options = [];
+  if (open > 0) {
+    options.push({
+      value: 'decide',
+      label: `Record decisions still open (${open})`,
+      hint: 'Walk the ones this repository has not answered. Each becomes an ADR plus the rules, guidelines, runbooks and glossary terms it implies.',
+    });
+  }
+  options.push({
+    value: 'review',
+    label: 'Review what is recorded here',
+    hint: 'The decisions table: what was decided, what is open, what was dismissed.',
+  });
+  if (decided > 0) {
+    options.push({
+      value: 'revise',
+      label: `Change a decision already recorded (${decided})`,
+      hint: 'The ADR keeps its number and gains a History section naming what the decision used to be.',
+    });
+  }
+  if (addableAgents.length > 0) {
+    options.push({
+      value: 'agents',
+      label: `Add an AI assistant (${addableAgents.length} available)`,
+      hint: `Native files for ${addableAgents.join(', ')}, pointing at the AGENTS.md and docs/ already here.`,
+    });
+  }
+  options.push({
+    value: 'update',
+    label: stale ? `Refresh generated files for specframe ${version}` : 'Refresh generated files',
+    hint: 'Re-renders what specframe manages. Files you own are never overwritten; one you edited is kept, with the new version beside it.',
+  });
+  options.push({
+    value: 'uninstall',
+    label: 'Remove what specframe created',
+    hint: 'Managed files only by default; your docs and ADRs are kept unless you pass --purge.',
+  });
+
+  const preamble = [
+    `specframe ${manifest.version ?? 'unknown'} is installed here, in ${stored.mode} mode` +
+      (stale ? `; this CLI is ${version}.` : '.') +
+      ` ${decided} recorded, ${open} open.`,
+    'Run `specframe init --force` to re-run onboarding from scratch instead.',
+  ];
+
+  return { options, preamble };
 }
 
 // AGENTS.md/CLAUDE.md/etc. that already exist here, from outside specframe —
@@ -390,7 +505,13 @@ async function runInit(cwd, version, flags) {
 
   const existingManifest = await readManifest(targetDir);
   if (existingManifest?.config && !flags.force) {
-    reportAlreadyInstalled(existingManifest);
+    // Off a terminal (CI, a pipe, an agent) there is nobody to pick from a
+    // menu: keep naming the commands that apply, which is scriptable.
+    if (flags.yes || !process.stdin.isTTY) {
+      reportAlreadyInstalled(existingManifest);
+      return;
+    }
+    await runInstalledMenu(cwd, version, flags, existingManifest);
     return;
   }
 
