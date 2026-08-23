@@ -64,7 +64,7 @@ After the project name, package manager and agent assistants, you pick one of **
 
 ### Blank — templates only
 
-Every section index, a `0000-template.md` with field-by-field instructions, a worked example per section, `docs/README.md` explaining what belongs where, and `docs/DECISIONS.md` listing the whole catalog as open — each entry with its options and a reserved ADR number. Nothing decided for you, nothing to guess about *how*.
+Every section index, a `0000-template.md` with field-by-field instructions, a worked example per section, `docs/README.md` explaining what belongs where, and `docs/DECISIONS.md` listing the whole catalog as open — each entry with its options and a reserved ADR number. Nothing decided for you, nothing left to guess about *how* to decide.
 
 ### Blueprint — start from a known architecture
 
@@ -160,7 +160,7 @@ The `bootstrapper` agent walks the checklist in `docs/DECISIONS.md`, hunts for e
 - **Doesn't pretend.** A `--detected` ADR says it documents an existing implementation, dates itself *recorded not decided*, and asks you for the original reason — the one thing code can't tell you.
 - **Proposes dismissals for what plainly doesn't apply.** A backend-only service has no frontend decisions, so it hands you a `specframe dismiss --group frontend` with the evidence of absence — it never runs one itself.
 
-Documents you already wrote are never touched, and a decision an existing ADR covers is skipped, not duplicated. By hand works the same way:
+Documents you already wrote are never touched, and a decision an existing ADR covers is skipped, not duplicated. Recording one by hand works the same way:
 
 ```bash
 specframe decide --set persistence=relational,branching=trunk-based --detected
@@ -261,7 +261,7 @@ specframe review --open   # only what's still open
 specframe review --json   # the same, as data — what specframe-decide reads
 ```
 
-What was decided, which ADR carries it, which answers merely took the recommendation: "what did we agree on here" without opening thirty ADRs. Writes nothing.
+What was decided, which ADR carries it, which answers took the recommendation: "what did we agree on here" without opening thirty ADRs. Writes nothing.
 
 ---
 
@@ -340,7 +340,7 @@ Hand-edited a managed file? The new version lands beside it as `<file>.specframe
 
 > **From 0.4.x or earlier.** The `empty` / `universal` content profiles are gone, replaced by the modes above. A `universal` repo keeps everything it has and counts as blank from here; the baseline it shipped as two long READMEs now lives as individual rules and guidelines, emitted by the decisions that call for them.
 
-> **From 0.7.x or earlier.** The harness-shaped assets a spec/plan tool does better are gone (`explorer`, `planner`, `/specframe-specify`, `/specframe-plan`); `reviewer` becomes `conformance`, `/specframe-review` becomes `/specframe-conform`, `specframe-adr-draft`/`specframe-rule-check` become `specframe-decide`/`specframe-conform`. On `update` an asset you never touched is removed outright, one you hand-edited is reported, `docs/INTEROP.md` is added, and nothing under `docs/**` moves.
+> **From 0.7.x or earlier.** The harness-shaped assets a spec/plan tool does better are gone (`explorer`, `planner`, `/specframe-specify`, `/specframe-plan`); `reviewer` becomes `conformance`, `/specframe-review` becomes `/specframe-conform`, `specframe-adr-draft`/`specframe-rule-check` become `specframe-decide`/`specframe-conform`. On `update`, untouched assets are removed and hand-edited ones reported; `docs/INTEROP.md` is added, and nothing under `docs/**` moves.
 
 ---
 
@@ -350,7 +350,7 @@ Hand-edited a managed file? The new version lands beside it as `<file>.specframe
 specframe uninstall
 ```
 
-Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, is **kept by default** — it may hold months of your work. Empty scaffolding dirs are pruned, the repo root never.
+Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, is **kept by default** — it may hold months of your work. Empty scaffolding dirs are pruned; the repo root is never deleted.
 
 | Flag | Effect |
 | --- | --- |
