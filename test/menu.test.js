@@ -22,7 +22,20 @@ const values = (manifest, version = '0.2.0') =>
 
 test('a repo with open decisions and none recorded offers decide, not revise', () => {
   const menu = values(manifestOf(BASE));
-  assert.deepEqual(menu, ['decide', 'review', 'agents', 'update', 'uninstall']);
+  assert.deepEqual(menu, [
+    'decide',
+    'review',
+    'agents',
+    'agents-remove',
+    'update',
+    'uninstall',
+  ]);
+});
+
+test('a repo with no harness configured cannot be asked to remove one', () => {
+  const menu = values(manifestOf({ ...BASE, agentTargets: [] }));
+  assert.ok(!menu.includes('agents-remove'));
+  assert.ok(menu.includes('agents'), 'but it can add the first');
 });
 
 test('a repo with recorded decisions offers revise', () => {

@@ -325,18 +325,18 @@ export async function askMenu({ title, preamble = [], options, io = createReadli
  * @param {string[]} available  target values still addable, in catalog order.
  * @returns {string[]|null} the chosen values, or null when the user quit.
  */
-export async function askAgentTargets({ available, io = createReadlineIo() }) {
+export async function askAgentTargets({ available, verb = 'add', io = createReadlineIo() }) {
   const options = AGENT_TARGETS.filter((target) => available.includes(target.value));
   const width = terminalWidth();
+  const blurb =
+    verb === 'remove'
+      ? 'Each one drops that tool\'s native files. AGENTS.md, docs/ and the decision log stay exactly as they are. Pick any number.'
+      : 'Each one adds that tool\'s native files, pointing at the AGENTS.md and docs/ already in this repository. Pick any number.';
   try {
     const choice = await askChoice(io, {
       preamble: [
-        sectionTitle('Agent assistants to add', { width }),
-        ...wrapText(
-          'Each one adds that tool\'s native files, pointing at the AGENTS.md and docs/ already in this repository. Pick any number.',
-          width,
-          '  ',
-        ).map((line) => theme.muted(line)),
+        sectionTitle(verb === 'remove' ? 'Agent assistants to remove' : 'Agent assistants to add', { width }),
+        ...wrapText(blurb, width, '  ').map((line) => theme.muted(line)),
         '',
       ].join('\n'),
       options,
@@ -348,7 +348,10 @@ export async function askAgentTargets({ available, io = createReadlineIo() }) {
         ['enter', 'cancel'],
         ['?', 'what each one gets'],
       ],
-      help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+      help:
+        verb === 'remove'
+          ? 'Only that tool\'s own files go. A managed file you edited by hand is kept, and so is a file that is yours to own (GEMINI.md) — the report names them.'
+          : 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
     });
     return choice.kind === CONTROL.SELECT ? choice.values.map((n) => options[n - 1].value) : null;
   } finally {

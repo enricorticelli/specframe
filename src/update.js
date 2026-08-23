@@ -196,6 +196,77 @@ export function planUpdateActions({
   return actions;
 }
 
+/**
+ * Decide, per file, what dropping an agent harness should do to it — pure and
+ * fs-free so it can be tested in isolation.
+ *
+ * The rule is `uninstall`'s, narrowed to one harness's files: specframe removes
+ * what it owns and wrote, and never quietly deletes what somebody has written
+ * in. A managed file edited by hand is therefore kept and reported, and the
+ * harness's user-owned file (GEMINI.md is the one) is kept unless `purge` says
+ * otherwise — the whole point of that file is that it is yours to extend, and
+ * changing your mind about which assistant reads it is no reason to lose it.
+ *
+ * Inputs:
+ *   relpaths     the files the dropped harness(es) contributed.
+ *   manifest     the manifest written by a previous run, or null.
+ *   diskContents { relpath: text } for those files; a missing key means the
+ *                file is not on disk and there is nothing to do.
+ *   purge        also remove the harness's user-owned files.
+ *   force        also remove a managed file that was edited by hand.
+ *
+ * Output: Array<{ relpath, managed, action }> where action is one of
+ *   orphan-remove | orphan | skip-user
+ */
+export function planAgentRemoval({
+  relpaths,
+  manifest,
+  diskHashes = {},
+  diskContents = {},
+  purge = false,
+  force = false,
+}) {
+  const actions = [];
+
+  for (const relpath of relpaths) {
+    const diskText = diskContents[relpath];
+    const diskHash = diskText !== undefined ? sha256(diskText) : diskHashes[relpath];
+    if (diskHash === undefined) continue; // already gone
+
+    const info = manifest?.files?.[relpath];
+    // Ownership comes from the manifest where it is recorded, and from the plan
+    // that produced these paths otherwise (a file specframe wrote before it
+    // tracked ownership, or one added outside a manifest-writing run).
+    const managed = info?.managed ?? true;
+
+    if (!managed) {
+      // `forced` says the file went because the caller asked, not because
+      // specframe could see it had nothing of the user's in it. The report says
+      // so — "never edited, so removed" about a file somebody just edited is
+      // the kind of wrong that makes the rest of the output untrustworthy.
+      actions.push(
+        purge
+          ? { relpath, managed: false, action: 'orphan-remove', forced: true }
+          : { relpath, managed: false, action: 'skip-user' },
+      );
+      continue;
+    }
+
+    const untouchedSinceWrite = info?.sha256 !== undefined && diskHash === info.sha256;
+    if (untouchedSinceWrite) {
+      actions.push({ relpath, managed: true, action: 'orphan-remove' });
+      continue;
+    }
+    actions.push(
+      force
+        ? { relpath, managed: true, action: 'orphan-remove', forced: true }
+        : { relpath, managed: true, action: 'orphan' },
+    );
+  }
+
+  return actions;
+}
+
 // Decide, per file recorded in the manifest, what `specframe uninstall` should
 // do — pure and fs-free so it can be tested in isolation.
 //

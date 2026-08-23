@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
-import { planUpdateActions, planUninstallActions } from './update.js';
+import { planAgentRemoval, planUpdateActions, planUninstallActions } from './update.js';
 import { resolveDecisions } from './decisions/resolve.js';
 import { LOCAL_ADR_MIN, LOCAL_ADR_STEP, getDecision } from './decisions/catalog.js';
 import { pad, theme } from './style.js';
@@ -874,7 +874,11 @@ function reportAction(action, dryRun) {
   if (action.action === 'conflict') suffix = ` ${theme.glyph.arrow} wrote ${action.relpath}.specframe-new (yours kept)`;
   if (action.action === 'skip-user') suffix = ' (your file, untouched)';
   if (action.action === 'orphan') suffix = ' (no longer generated — edited by hand, so kept; remove it yourself if unused)';
-  if (action.action === 'orphan-remove') suffix = ' (no longer generated — never edited, so removed)';
+  if (action.action === 'orphan-remove') {
+    suffix = action.forced
+      ? ' (no longer generated — removed as asked)'
+      : ' (no longer generated — never edited, so removed)';
+  }
   console.log(`${actionTag(label, { dryRun })}${action.relpath}${theme.muted(suffix)}`);
 }
 
@@ -988,6 +992,89 @@ export async function addAgentTargets(rawConfig) {
       version: manifest?.version ?? version,
       config: { ...(manifest?.config ?? {}), agentTargets: config.agentTargets },
       files: { ...(manifest?.files ?? {}), ...rendered.files },
+    });
+  }
+
+  return actions;
+}
+
+/**
+ * Drop native support for one or more agent harnesses from a repository — the
+ * CLI half of `specframe agents remove`.
+ *
+ * The mirror of addAgentTargets, and narrow in the same way: the files in scope
+ * are exactly the ones the dropped targets contributed, computed as the
+ * difference between the plan before and the plan after. AGENTS.md and docs/
+ * are untouched, so the repository keeps its whole decision log — it just stops
+ * shipping that tool's native files. Removing the last one is a supported
+ * position: AGENTS.md alone covers most tools.
+ *
+ * @param {string[]} previousTargets  the targets recorded in the manifest.
+ * @param {boolean} purge  also remove the harness's user-owned file (GEMINI.md).
+ * @param {boolean} force  also remove a managed file that was edited by hand.
+ */
+export async function removeAgentTargets(rawConfig) {
+  const {
+    targetDir,
+    previousTargets = [],
+    dryRun = false,
+    purge = false,
+    force = false,
+    quiet = false,
+  } = rawConfig;
+  const config = normalizeConfig(rawConfig);
+  const manifest = await readManifest(targetDir);
+
+  const keptRelpaths = new Set((await buildTemplatePlan(config)).map((entry) => entry.relpath));
+  const before = await buildTemplatePlan({ ...config, agentTargets: previousTargets });
+  // A path the remaining targets still produce is not this harness's to remove
+  // — nothing shares one today, but the set difference is what makes that a
+  // property of the code rather than of the adapter table.
+  const gone = before.filter((entry) => !keptRelpaths.has(entry.relpath));
+
+  const diskContents = await readDiskFiles(targetDir, gone);
+  const actions = planAgentRemoval({
+    relpaths: gone.map((entry) => entry.relpath),
+    manifest,
+    diskContents,
+    purge,
+    force,
+  });
+
+  await applyActions({ targetDir, actions, dryRun, quiet });
+
+  // A `<file>.specframe-new` beside a file that just went is specframe's own
+  // output for a document that no longer exists — nothing left to merge it
+  // into, so it goes too rather than sitting there as litter.
+  if (!dryRun) {
+    for (const action of actions) {
+      if (action.action !== 'orphan-remove') continue;
+      const pending = `${toAbsPath(targetDir, action.relpath)}.specframe-new`;
+      if (!(await exists(pending))) continue;
+      await rm(pending, { force: true });
+      await pruneEmptyDirs(path.dirname(pending), targetDir);
+    }
+  }
+
+  if (!dryRun) {
+    const files = { ...(manifest?.files ?? {}) };
+    // A file that is really gone leaves the manifest with it. One kept — edited
+    // by hand, or user-owned — stays tracked, so `uninstall` still knows about
+    // it and `update` can go on reporting it as an orphan.
+    for (const action of actions) {
+      if (action.action === 'orphan-remove') delete files[action.relpath];
+    }
+    // A path that was never on disk is absent from `actions` entirely; it has
+    // no business staying in the manifest either.
+    const acted = new Set(actions.map((action) => action.relpath));
+    for (const entry of gone) {
+      if (!acted.has(entry.relpath)) delete files[entry.relpath];
+    }
+
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...(manifest?.config ?? {}), agentTargets: config.agentTargets },
+      files,
     });
   }
 

@@ -37,6 +37,7 @@ import {
   normalizeConfig,
   planRevisionEffects,
   recordLocalAdr,
+  removeAgentTargets,
   reviseTemplateSet,
   today,
   uninstallTemplateSet,
@@ -77,6 +78,7 @@ export function parseArgs(argv) {
     noColor: false,
     open: false,
     json: false,
+    all: false,
   };
   let command = 'init';
   let commandSeen = false;
@@ -93,6 +95,7 @@ export function parseArgs(argv) {
     if (arg === '--no-color' || arg === '--no-colour') { flags.noColor = true; continue; }
     if (arg === '--open') { flags.open = true; continue; }
     if (arg === '--json') { flags.json = true; continue; }
+    if (arg === '--all') { flags.all = true; continue; }
 
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
@@ -154,11 +157,12 @@ Usage:
                                   frontend decision in a backend-only service,
                                   say. Leaves the open backlog with no ADR.
   specframe restore <id>         Undo a dismissal; the decision reopens.
-  specframe agents [add <ids>]   Add native files for another AI assistant
-                                  (Claude, Codex, …) to a repo already
-                                  scaffolded — or the first one, if none were
-                                  picked at init. With no argument, lists what
-                                  is configured and what can be added.
+  specframe agents [add|remove|set <ids>]
+                                 Change which AI assistants (Claude, Codex, …)
+                                  get native files in a repo already
+                                  scaffolded — including the first one, if none
+                                  were picked at init, and none at all. With no
+                                  argument, lists what is configured.
   specframe update [options]     Refresh specframe-managed artifacts.
   specframe uninstall [options]  Remove everything specframe created.
 
@@ -261,15 +265,29 @@ Restore options ('restore <id>[,<id>...]'):
   -n, --dry-run       Show what would be written, without writing it.
       --json          Print { restored, files } instead of a message.
 
-Agents options ('agents add <id>[,<id>...]', or just 'agents add' to pick from
-a list):
+Agents subcommands (each takes '<id>[,<id>...]', or no argument on a terminal
+to pick from a list):
+  agents                     What is configured here, and what can be added.
+  agents add codex,gemini    Write those harnesses' native files.
+  agents remove codex        Drop a harness's files. --all drops every one.
+  agents set claude,gemini   Make it exactly this list — adds and removes as
+                             needed. 'set none' leaves the repo with none.
+
+Agents options:
       --agents LIST  Same list, as a flag: \`agents add --agents codex,gemini\`.
-  -n, --dry-run      Show what would be written, without writing it.
-  -f, --force        Rewrite one of this harness's files if you edited it.
-      --json         Print { added, agentTargets, files } instead of messages.
-Only ever adds: harnesses already configured are left alone (\`specframe update\`
-refreshes their files), and nothing outside the new harness's own files — no
-doc, no ADR, not AGENTS.md — is touched.
+      --all          On remove: every harness configured here.
+  -n, --dry-run      Show what would happen, without touching anything.
+  -f, --force        On add: rewrite one of this harness's files if you edited
+                     it. On remove: delete one you edited (kept by default).
+      --purge        On remove: also delete the harness's user-owned file
+                     (GEMINI.md), which is otherwise kept as yours.
+      --json         Print { added | removed, agentTargets, files } instead of
+                     messages.
+Nothing outside the harness's own files — no doc, no ADR, not AGENTS.md — is
+ever touched, so a repository with no harness at all is a supported position:
+AGENTS.md is generated regardless and covers most tools. Adding leaves
+harnesses already configured alone (\`specframe update\` refreshes their files);
+removing deletes only what specframe wrote and you never edited.
 
 Update options:
   -f, --force      Overwrite managed files even if you edited them.
@@ -378,6 +396,7 @@ async function runInstalledMenu(cwd, version, flags, manifest) {
   // The menu is the interactive surface, so `agents` gets its picker rather
   // than the list-of-ids form the flag-driven command takes.
   if (chosen === 'agents') return runAgents(cwd, version, { ...flags, target: 'add', target2: undefined });
+  if (chosen === 'agents-remove') return runAgents(cwd, version, { ...flags, target: 'remove', target2: undefined });
   if (chosen === 'update') return runUpdate(cwd, version, flags);
 
   // Uninstall is one keystroke from the top of a menu, unlike `specframe
@@ -441,6 +460,13 @@ export function buildInstalledMenu({ manifest, version }) {
       value: 'agents',
       label: `Add an AI assistant (${addableAgents.length} available)`,
       hint: `Native files for ${addableAgents.join(', ')}, pointing at the AGENTS.md and docs/ already here.`,
+    });
+  }
+  if (stored.agentTargets.length > 0) {
+    options.push({
+      value: 'agents-remove',
+      label: `Remove an AI assistant (${stored.agentTargets.join(', ')})`,
+      hint: 'Drops that tool\'s native files. AGENTS.md, docs/ and the decision log stay as they are — a repo with no harness is a supported position.',
     });
   }
   options.push({
@@ -1297,38 +1323,53 @@ async function runAgents(cwd, version, flags) {
   const stored = normalizeConfig(manifest.config);
   const configured = stored.agentTargets;
   const available = AGENT_TARGET_LIST.map((t) => t.value).filter((value) => !configured.includes(value));
+  const context = { targetDir, version, flags, stored, configured, available };
 
-  // `agents` and `agents list` report; `agents add <ids>` and the bare
-  // `agents <ids>` shorthand write.
-  const sub = flags.target === 'add' ? 'add' : flags.target === 'list' || flags.target === undefined ? 'list' : 'add';
-  const rawList = flags.agents ?? (flags.target === 'add' ? flags.target2 : flags.target);
+  // `agents` and `agents list` report. `add`, `remove` (`rm`) and `set` write;
+  // a bare `agents <ids>` is shorthand for `add`, which is what a first-time
+  // reach for this command almost always means.
+  const SUBCOMMANDS = new Set(['add', 'remove', 'rm', 'set', 'list']);
+  const named = SUBCOMMANDS.has(flags.target) ? flags.target : null;
+  const sub = named ?? (flags.target === undefined ? 'list' : 'add');
+  const rawList = flags.agents ?? (named ? flags.target2 : flags.target);
 
-  if (sub === 'list') {
-    reportAgentTargets({ configured, available });
-    return;
+  if (sub === 'list') return reportAgentTargets({ configured, available });
+  if (sub === 'add') return runAgentsAdd(context, rawList);
+  if (sub === 'set') return runAgentsSet(context, rawList);
+  return runAgentsRemove(context, rawList);
+}
+
+// The id list a subcommand was given, validated. `null` means "nothing was
+// named" — the caller decides whether to open a picker or explain itself.
+function parseAgentList(rawList) {
+  if (!rawList) return null;
+  const { valid, unknown } = splitAgentTargets(rawList);
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown agent target(s): ${unknown.join(', ')}\n` +
+        `Expected any of: ${AGENT_TARGET_LIST.map((t) => t.value).join(', ')}.`,
+    );
   }
+  return valid;
+}
+
+async function runAgentsAdd({ targetDir, version, flags, stored, configured, available }, rawList) {
+  // Validated before the state checks below, so a typo is reported as a typo
+  // rather than as whatever this repository happens not to need.
+  let requested = parseAgentList(rawList);
 
   if (available.length === 0) {
     console.log('Every agent harness specframe knows about is already configured here. Nothing to add.');
     return;
   }
 
-  let requested;
-  if (rawList) {
-    const { valid, unknown } = splitAgentTargets(rawList);
-    if (unknown.length > 0) {
+  if (requested === null) {
+    if (flags.yes || !process.stdin.isTTY) {
       throw new Error(
-        `Unknown agent target(s): ${unknown.join(', ')}\n` +
-          `Expected any of: ${AGENT_TARGET_LIST.map((t) => t.value).join(', ')}.`,
+        'Which agent harness? Name one or more, e.g. `specframe agents add codex,gemini`.\n' +
+          `Still available here: ${available.join(', ')}.`,
       );
     }
-    requested = valid;
-  } else if (flags.yes || !process.stdin.isTTY) {
-    throw new Error(
-      'Which agent harness? Name one or more, e.g. `specframe agents add codex,gemini`.\n' +
-        `Still available here: ${available.join(', ')}.`,
-    );
-  } else {
     requested = await askAgentTargets({ available });
     if (requested === null || requested.length === 0) {
       console.log(theme.muted('\nNothing selected. Nothing was written.'));
@@ -1375,12 +1416,7 @@ async function runAgents(cwd, version, flags) {
   if (flags.json) {
     console.log(
       JSON.stringify(
-        {
-          dryRun: flags.dryRun,
-          added,
-          agentTargets,
-          files: actions.map((a) => ({ relpath: a.relpath, action: a.action })),
-        },
+        { dryRun: flags.dryRun, added, agentTargets, files: fileReport(actions) },
         null,
         2,
       ),
@@ -1392,8 +1428,151 @@ async function runAgents(cwd, version, flags) {
     console.log('\nDry run complete. Nothing was written.');
     return;
   }
-  console.log(`\n${theme.good('Done.')} ${added.join(', ')} now read the same context as the rest of this repository.`);
+  console.log(
+    `\n${theme.good('Done.')} ${added.join(', ')} ${added.length === 1 ? 'now reads' : 'now read'} ` +
+      'the same context as the rest of this repository.',
+  );
 }
+
+// Drop a harness. Nothing about the decision log changes — this is the tool's
+// own files and nothing else — so removing the last one is a position, not a
+// half-uninstall: AGENTS.md is generated regardless and covers most tools.
+async function runAgentsRemove({ targetDir, version, flags, stored, configured }, rawList) {
+  let requested = flags.all ? [...configured] : parseAgentList(rawList);
+
+  if (configured.length === 0) {
+    console.log('No agent harness is configured here. Nothing to remove.');
+    return;
+  }
+
+  if (requested === null) {
+    if (flags.yes || !process.stdin.isTTY) {
+      throw new Error(
+        'Which agent harness? Name one or more, e.g. `specframe agents remove codex`.\n' +
+          `Pass --all to remove every one. Configured here: ${configured.join(', ')}.`,
+      );
+    }
+    requested = await askAgentTargets({ available: configured, verb: 'remove' });
+    if (requested === null || requested.length === 0) {
+      console.log(theme.muted('\nNothing selected. Nothing was removed.'));
+      return;
+    }
+  }
+
+  const notHere = requested.filter((value) => !configured.includes(value));
+  if (notHere.length > 0) {
+    console.warn(theme.muted(`\nNot configured here, nothing to remove: ${notHere.join(', ')}.`));
+  }
+  const removed = requested.filter((value) => configured.includes(value));
+  if (removed.length === 0) {
+    console.log('Nothing to remove.');
+    return;
+  }
+
+  const agentTargets = configured.filter((value) => !removed.includes(value));
+  if (!flags.json) {
+    console.log(
+      `\nRemoving ${removed.map((value) => theme.bold(agentTargetLabel(value))).join(', ')}` +
+        theme.muted(
+          agentTargets.length > 0
+            ? `, keeping ${agentTargets.join(', ')}.`
+            : ' — this repository will have no harness-specific files left.',
+        ) +
+        '\n',
+    );
+  }
+
+  const actions = await removeAgentTargets({
+    targetDir,
+    ...stored,
+    agentTargets,
+    previousTargets: configured,
+    version,
+    purge: flags.purge,
+    force: flags.force,
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(
+      JSON.stringify(
+        { dryRun: flags.dryRun, removed, agentTargets, files: fileReport(actions) },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  const kept = actions.filter((action) => action.action !== 'orphan-remove');
+  if (kept.length > 0) {
+    console.log(
+      theme.muted(
+        `\n${kept.length} file(s) were kept: a managed one you had edited, or one that is yours to own.` +
+          '\nRemove them yourself, or re-run with --force (edited) / --purge (yours).',
+      ),
+    );
+  }
+
+  if (flags.dryRun) {
+    console.log('\nDry run complete. Nothing was removed.');
+    return;
+  }
+  console.log(
+    `\n${theme.good('Done.')} ` +
+      (agentTargets.length > 0
+        ? `${agentTargets.join(', ')} ${agentTargets.length === 1 ? 'still reads' : 'still read'} this repository's context.`
+        : 'No harness-specific files here now; AGENTS.md and docs/ are untouched and still cover most tools.'),
+  );
+}
+
+// The declarative form: name the harnesses this repository should have, and
+// whatever that implies happens. `set none` leaves it with none. It exists
+// because the two-step ("stop shipping codex, start shipping gemini") is the
+// shape of the actual intent, and doing it as add-then-remove by hand means a
+// window where the repo has both, or neither.
+async function runAgentsSet(context, rawList) {
+  const { configured, flags } = context;
+  const requested = parseAgentList(rawList);
+  if (requested === null) {
+    throw new Error(
+      'Which agent harnesses should this repository have?\n' +
+        'Name them all — `specframe agents set claude,gemini` — or `set none` for none.\n' +
+        `Configured here: ${configured.length > 0 ? configured.join(', ') : 'none'}.`,
+    );
+  }
+
+  const toRemove = configured.filter((value) => !requested.includes(value));
+  const toAdd = requested.filter((value) => !configured.includes(value));
+  if (toRemove.length === 0 && toAdd.length === 0) {
+    console.log(
+      `Already exactly ${configured.length > 0 ? configured.join(', ') : 'none'}. Nothing to do.`,
+    );
+    return;
+  }
+
+  // Removal first, so the intermediate state is the smaller one: an interrupted
+  // `set` leaves a repo shipping less than asked for rather than files for a
+  // harness that was meant to go.
+  if (toRemove.length > 0) {
+    await runAgentsRemove(context, toRemove.join(','));
+  }
+  if (toAdd.length > 0) {
+    const configuredNow = configured.filter((value) => !toRemove.includes(value));
+    await runAgentsAdd(
+      {
+        ...context,
+        stored: { ...context.stored, agentTargets: configuredNow },
+        configured: configuredNow,
+        available: AGENT_TARGET_LIST.map((t) => t.value).filter((value) => !configuredNow.includes(value)),
+      },
+      toAdd.join(','),
+    );
+  }
+}
+
+const fileReport = (actions) => actions.map((a) => ({ relpath: a.relpath, action: a.action }));
 
 function reportAgentTargets({ configured, available }) {
   const label = (value) => {
@@ -1411,12 +1590,19 @@ function reportAgentTargets({ configured, available }) {
 
   if (available.length === 0) {
     console.log(theme.muted('\nEvery harness specframe knows about is configured here.'));
+    console.log(theme.muted(`Run \`specframe agents remove ${configured[0]}\` to drop one.`));
     return;
   }
 
   console.log(`\n${theme.bold('Available to add:')}`);
   for (const value of available) console.log(label(value));
-  console.log(theme.muted(`\nRun \`specframe agents add ${available[0]}\` (or with no argument, to pick from a list).`));
+  console.log(
+    theme.muted(
+      `\nRun \`specframe agents add ${available[0]}\` (or with no argument, to pick from a list)` +
+        `${configured.length > 0 ? `, \`specframe agents remove ${configured[0]}\`` : ''}, ` +
+        'or `specframe agents set <ids>` to name the exact set.',
+    ),
+  );
 }
 
 async function runUpdate(cwd, version, flags) {

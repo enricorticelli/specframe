@@ -228,21 +228,34 @@ well and is correct only until the change lands. See
 
 **Agents that don't read `AGENTS.md`** get a thin native pointer instead: `GEMINI.md` (yours to extend), `.continue/rules/specframe.md` and `.amazonq/rules/specframe.md` (managed). One canonical source, one thing to maintain.
 
-### Adding an assistant later
+### Changing assistants later
 
-Onboarding asks once; the answer ages. `specframe agents` adds a harness to a repo
-that's already scaffolded — or the first one, if none was picked at init.
+Onboarding asks once; the answer ages. `specframe agents` changes which harnesses
+this repo ships files for — including the first one, if none was picked at init,
+and none at all.
 
 ```bash
 specframe agents                        # what's configured here, and what can be added
 specframe agents add codex,gemini       # write their native files
-specframe agents add                    # or pick from a list
+specframe agents remove codex           # drop a harness's files
+specframe agents remove --all           # drop every one
+specframe agents set claude,gemini      # make it exactly this list
+specframe agents set none               # …or no harness at all
 ```
 
-It only ever adds: harnesses already configured are left alone (`specframe update`
-refreshes their files), and nothing outside the new harness's own files — no doc,
-no ADR, not `AGENTS.md` — is touched. A file you'd already written at one of those
-paths is kept, with the new version beside it as `<file>.specframe-new`.
+Any subcommand with no ids, on a terminal, opens a picker instead.
+
+Nothing outside the harness's own files — no doc, no ADR, not `AGENTS.md` — is ever
+touched, so the decision log survives every one of these unchanged, and a repo with
+no harness is a supported position: `AGENTS.md` is generated regardless and covers
+most tools.
+
+| | Adding | Removing |
+| --- | --- | --- |
+| A harness already in the recorded list | left alone (`specframe update` refreshes it) | — |
+| A file specframe wrote and you never edited | written | removed |
+| A file you'd written at that path, or edited | kept, new version beside it as `<file>.specframe-new` | kept and reported (`--force` removes it) |
+| A file that's yours to own (`GEMINI.md`) | kept | kept (`--purge` removes it) |
 
 ---
 
@@ -261,8 +274,9 @@ decision in a repo that has recorded none, or an assistant already configured.
   2) Review what is recorded here
   3) Change a decision already recorded (12)
   4) Add an AI assistant (4 available)
-  5) Refresh generated files
-  6) Remove what specframe created
+  5) Remove an AI assistant (claude, codex)
+  6) Refresh generated files
+  7) Remove what specframe created
 ```
 
 One action per run — each of these is a session of its own. Off a terminal
