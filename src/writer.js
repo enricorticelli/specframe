@@ -47,6 +47,33 @@ const CLI_FALLBACK_NOTE =
   '`npx --yes specframe <args>` instead, same behaviour, no install required. Never\n' +
   'substitute writing the file yourself for a command that fails to run.';
 
+// Substituted into every surface that can create an ADR — the root context files,
+// the specframe-record skill, the always-on rules file. The threshold itself is
+// not new: it has always been in docs/adr/README.md. But an agent reads whichever
+// file its harness loads, and none of those restated it, so every entry point was
+// looser than the doc it pointed at — "draft an ADR" with no threshold at all.
+// The result is an ADR for a variable name. Defined once here so no surface can
+// be the loose one, and so the null outcome is stated where the destinations are.
+const ADR_GATE_NOTE =
+  'Before recording an ADR, answer all three. An ADR is warranted only if every\n' +
+  'answer is yes:\n' +
+  '\n' +
+  '1. Were there **two or more credible options** — ones a competent team would\n' +
+  '   argue about, not one real option and some bad ones?\n' +
+  '2. Would **reversing it later be expensive** — does it shape code that does not\n' +
+  '   exist yet, or does unwinding it reach past the module it lives in?\n' +
+  '3. Would someone reading this code in six months **ask "why is it like this?"**\n' +
+  '   and not find the answer in the code?\n' +
+  '\n' +
+  'If any answer is no, do not record an ADR. Say which question failed, then route\n' +
+  'it: a default with room for judgement is a guideline, a constraint with no\n' +
+  'acceptable exception is a rule, a procedure is a runbook, a term belongs in the\n' +
+  'glossary — and a reversible implementation detail is none of them, so **writing\n' +
+  'nothing is the correct outcome.** Naming, file layout, which helper to call, a\n' +
+  'library used in one place and swappable in an afternoon: that is code, not a\n' +
+  'decision. An ADR for one of those costs more than it records — it dilutes the\n' +
+  'log until an ADR stops meaning anything.';
+
 export function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -502,6 +529,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
     openDecisions: renderOpenDecisions(resolved),
     dismissedDecisions: renderDismissedDecisions(resolved),
     cliFallback: CLI_FALLBACK_NOTE,
+    adrGate: ADR_GATE_NOTE,
   };
 
   const plan = [];

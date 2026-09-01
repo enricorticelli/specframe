@@ -15,9 +15,26 @@ Write an ADR when **all** of these hold:
 - reversing the choice later would be expensive;
 - someone reading the code in six months would ask "why is it like this?".
 
-Do not write one for a decision with no alternative, or for something a
-guideline already covers. If the choice constrains future code, the ADR is the
-right home; if it merely describes today's style, it is a guideline.
+If any one of the three fails, there is no ADR. Where it goes instead:
+
+| What it is | Where it goes |
+| --- | --- |
+| A default with room for judgement | a guideline |
+| A constraint with no acceptable exception, and something checks it | a rule |
+| A procedure with steps and a way to verify it worked | a runbook |
+| A term that means something specific here | the glossary |
+| One credible option only — the obvious way, or the only way | nowhere |
+| Cheaply reversible inside the module it lives in | nowhere |
+
+**Nowhere is a legitimate outcome, and the most common one.** Naming, file
+layout, which helper to call, how a function is structured, a library used in one
+place and swappable in an afternoon: those are code, not decisions. An ADR for
+one of them costs more than it records — it dilutes the sections that matter
+until an ADR stops meaning anything, which is worse than the gap it was meant to
+fill.
+
+If the choice constrains future code, the ADR is the right home; if it merely
+describes today's style, it is a guideline.
 
 ## Conventions
 

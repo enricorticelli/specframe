@@ -35,11 +35,19 @@ to restore it — do not silently work around it.
 
 ## When something new emerges
 
-- A new architectural choice → draft an ADR in `docs/adr/`.
+- A choice that passes the ADR gate below → draft an ADR in `docs/adr/`.
 - A constraint with no acceptable exception → draft a rule in `docs/rules/`.
 - A new default way of doing something → draft a guideline in `docs/guidelines/`.
 - A missing operational procedure → draft a runbook in `docs/runbook/`.
 - A term that means something specific here → add it to `docs/glossary/`.
+- **None of the above → write nothing.** Most changes produce no document, and
+  that is the intended outcome, not a gap.
+
+### The ADR gate
+
+{{adrGate}}
+
+The long form of this, with the routing table, is in `docs/adr/README.md`.
 
 Rules and guidelines that follow from a decision carry a `Source: ADR-NNNN`
 line. Keep it: it is what makes a superseded decision traceable to everything

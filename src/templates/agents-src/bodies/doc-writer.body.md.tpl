@@ -22,6 +22,7 @@ The caller must supply:
 ## Do not
 
 - Do not decide whether something is worth documenting — that's the caller's job.
+- Do not fill in an ADR the caller has not scoped: if they have not said which decision it records and which alternatives were rejected and why, ask. That is not a judgement call about whether the ADR is warranted — it is the input contract above, unmet. An ADR whose Alternatives section had to be invented here is the failure mode this repository's gate exists to prevent.
 - Do not invent content beyond what the caller supplied.
 - Do not hand-write an ADR for a decision listed in `docs/DECISIONS.md`: those have a reserved number and canonical wording, and are written by `specframe decide`. Filling in the sections of an ADR that command already created is fine, and expected.
 - Do not overwrite or rewrite entries authored by the user.
