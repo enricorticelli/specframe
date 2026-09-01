@@ -14,6 +14,6 @@
   gate in docs/adr/README.md. Otherwise it is a guideline, a rule, or nothing:
   writing nothing is the usual and correct outcome.
 - If a new convention, rule, procedure, or term emerges, draft the matching doc.
-- Slash commands available when scaffolded: /specframe-decide (record a decision), /specframe-conform (review against ADRs/rules/guidelines), /specframe-bootstrap (populate docs from an existing codebase).
-- Skills available when scaffolded (Claude only): specframe-decide, specframe-record, specframe-conform, specframe-doc-sync.
+- Slash commands available when scaffolded: /specframe-decide (record a decision), /specframe-conform (review against ADRs/rules/guidelines), /specframe-bootstrap (populate docs from an existing codebase), /specframe-audit (judge the existing docs against their section gates).
+- Skills available when scaffolded (Claude only): specframe-decide, specframe-record, specframe-conform, specframe-doc-sync, specframe-audit.
 - Using Spec Kit, BMAD, OpenSpec, or a similar harness alongside this? See docs/INTEROP.md — it owns the spec and the plan, this scaffold owns the decision.

@@ -101,8 +101,20 @@ function actionTag(label, { dryRun = false } = {}) {
   return prefix + pad(tone(`[${label}]`), 11);
 }
 
+// AGENTS.md is the one root file that carries a generated section. The ADR gate
+// has to reach repositories scaffolded before it existed, and AGENTS.md is
+// user-owned: without this, `update` reports `[keep] your file` and the file
+// every agent reads first keeps the version of the instruction that had no
+// threshold at all. `## When something new emerges` is listed with it because
+// mergeGeneratedSections needs an anchor that already exists on disk to insert
+// a brand-new heading after — see its doc comment in update.js. That makes the
+// routing list specframe's to rewrite, which is the point: it is the list that
+// was wrong. Not `regenerable` — the gate is static, so `update` is the only
+// thing that needs to carry it, not every `decide` and `revise`.
+const AGENTS_SECTIONS = ['## When something new emerges', '## The ADR gate'];
+
 const TEMPLATE_TARGETS = [
-  { template: 'AGENTS.md.tpl', target: 'AGENTS.md' },
+  { template: 'AGENTS.md.tpl', target: 'AGENTS.md', generated: AGENTS_SECTIONS },
   { template: 'CLAUDE.md.tpl', target: 'CLAUDE.md' },
   {
     template: 'copilot-instructions.md.tpl',
@@ -122,7 +134,12 @@ const TEMPLATE_TARGETS = [
 // them is prose the user is invited to rewrite, and a refresh has to be able to
 // land without touching it.
 const INDEX_SECTION = ['## Index'];
-const ADR_README_SECTIONS = ['## Index', '## Decisions outside the catalog'];
+// `## When to write one` is the canonical long form of the ADR gate, and it is
+// listed here for the same reason AGENTS.md carries one: it has to reach repos
+// scaffolded before the gate was tightened. Unlike AGENTS.md's new heading it
+// needs no anchor — every adr/README.md ever written already has it — but the
+// order here must stay document order, ahead of the two indexes.
+const ADR_README_SECTIONS = ['## When to write one', '## Index', '## Decisions outside the catalog'];
 // The third heading is new as of the `dismissed` state and absent from every
 // docs/DECISIONS.md written before it — mergeGeneratedSections (update.js)
 // inserts it after `## Open decisions` on refresh rather than treating that as
@@ -263,12 +280,14 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-decide', description: 'Register an architectural decision — from the catalog or project-specific — with an agent in the loop.', body: 'specframe-decide' },
     { name: 'specframe-conform', description: 'Review current changes against ADRs/rules/guidelines.', body: 'specframe-conform-command' },
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
+    { name: 'specframe-audit', description: 'Audit every document under docs/ against the gate its own section publishes, and report what does not belong.' },
   ],
   skills: [
     { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
     { name: 'specframe-record', description: 'Auto-trigger when a decision outside the catalog needs an ADR — a project-specific choice the guided pass never asked about.' },
     { name: 'specframe-conform', description: 'Auto-trigger on diff/PR review: verify compliance with enforced rules.', body: 'specframe-conform-check' },
     { name: 'specframe-doc-sync', description: 'Auto-trigger when a new convention, term, or procedure emerges without a matching doc.' },
+    { name: 'specframe-audit', description: 'Auto-trigger when asked whether the docs are compliant: judge every existing document against its section gate. Reviews the standing log, not a diff.' },
   ],
 };
 
@@ -536,7 +555,12 @@ export async function buildTemplatePlan(rawConfig = {}) {
 
   for (const item of TEMPLATE_TARGETS) {
     const templateText = await readFile(path.join(templateDir, item.template), 'utf8');
-    plan.push({ relpath: item.target, content: renderTemplate(templateText, vars), managed: false });
+    plan.push({
+      relpath: item.target,
+      content: renderTemplate(templateText, vars),
+      managed: false,
+      ...(item.generated ? { sections: item.generated } : {}),
+    });
   }
 
   for (const item of CONTENT_TARGETS) {
@@ -772,23 +796,31 @@ export async function decideTemplateSet(rawConfig) {
 //
 // A project-specific ADR — "which payment provider" — has no catalog entry and
 // therefore no reserved number. It gets one from a band the catalog promises
-// never to use (LOCAL_ADR_MIN, see catalog.js), derived from what is already on
-// disk rather than from the manifest: the file is user-owned from the moment
-// it is written and is never deleted, so disk is the only source that can't
-// drift from what `specframe adr new` has actually allocated.
-async function nextLocalAdrNumber(targetDir) {
+// never to use (LOCAL_ADR_MIN, see catalog.js).
+//
+// Disk is the primary source: those files are user-owned from the moment they
+// are written, so disk cannot drift from what `adr new` actually allocated. It
+// is no longer the *only* source, though — `adr rm` can take a file away, and a
+// number that has been used must never be handed out again (docs/README.md:
+// "Numbers are permanent. They appear in links, in commit messages, and in
+// agent output."). Removed entries stay in the manifest as tombstones for
+// exactly this, so the high-water mark is the max across both.
+async function nextLocalAdrNumber(targetDir, config) {
   let entries = [];
   try {
     entries = await readdir(path.join(targetDir, 'docs', 'adr'));
   } catch {
-    return String(LOCAL_ADR_MIN);
+    entries = [];
   }
 
-  const used = entries
+  const onDisk = entries
     .map((name) => name.match(/^(\d{4,})-/))
     .filter(Boolean)
-    .map((m) => Number(m[1]))
-    .filter((n) => n >= LOCAL_ADR_MIN);
+    .map((m) => Number(m[1]));
+
+  const known = (config?.localAdrs ?? []).map((a) => Number(a.number));
+
+  const used = [...onDisk, ...known].filter((n) => Number.isFinite(n) && n >= LOCAL_ADR_MIN);
 
   return String(used.length === 0 ? LOCAL_ADR_MIN : Math.max(...used) + LOCAL_ADR_STEP);
 }
@@ -811,7 +843,7 @@ export async function recordLocalAdr({ targetDir, version, slug, title, date, dr
   }
 
   const config = normalizeConfig(manifest.config);
-  const number = await nextLocalAdrNumber(targetDir);
+  const number = await nextLocalAdrNumber(targetDir, config);
   const relpath = `docs/adr/${number}-${slug}.md`;
   const absPath = toAbsPath(targetDir, relpath);
 
@@ -861,6 +893,99 @@ export async function recordLocalAdr({ targetDir, version, slug, title, date, dr
   }
 
   return { number, slug, title, relpath, dryRun };
+}
+
+/**
+ * Withdraw an ADR recorded outside the catalog (`specframe adr rm`). The
+ * counterpart to recordLocalAdr, and the primitive the audit skill needs: an
+ * ADR that should never have been written can be taken out in one step instead
+ * of leaving a dangling index row and a stale manifest behind.
+ *
+ * Only the local band. A catalog ADR is a reserved decision with canonical
+ * wording, and "this repository should not have recorded it" is `dismiss`,
+ * while "we decided differently" is `revise` — neither is a deletion.
+ *
+ * The manifest entry is kept as a tombstone rather than dropped: the number it
+ * holds must never be allocated again.
+ */
+export async function removeLocalAdr({ targetDir, version, number, date, dryRun = false, quiet = false }) {
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${MANIFEST_RELPATH} in ${targetDir}.\n` +
+        'Run `specframe init` first — `adr rm` withdraws an ADR from an existing scaffold.',
+    );
+  }
+
+  if (!/^\d{4,}$/.test(String(number)) || Number(number) < LOCAL_ADR_MIN) {
+    throw new Error(
+      `ADR-${number} is not a decision \`adr rm\` can withdraw.\n\n` +
+        `Only ADRs numbered ${LOCAL_ADR_MIN} and up — the ones \`specframe adr new\` allocates.\n` +
+        'A catalog ADR is a reserved decision: use `specframe dismiss <id>` if it can never\n' +
+        'apply here, or `specframe revise <id>` if the choice itself changed.',
+    );
+  }
+
+  const config = normalizeConfig(manifest.config);
+  const entry = config.localAdrs.find((a) => a.number === String(number) && a.removed === undefined);
+  if (!entry) {
+    const tombstoned = config.localAdrs.some((a) => a.number === String(number));
+    throw new Error(
+      tombstoned
+        ? `ADR-${number} was already withdrawn.`
+        : `No ADR-${number} recorded in ${MANIFEST_RELPATH}.\n\n` +
+          'Run `specframe review --json` to see what is recorded. An ADR file written by\n' +
+          'hand was never allocated by specframe and is not tracked here: remove it, and\n' +
+          "its row in docs/adr/README.md's index, yourself.",
+    );
+  }
+
+  const relpath = `docs/adr/${entry.number}-${entry.slug}.md`;
+  const absPath = toAbsPath(targetDir, relpath);
+
+  const localAdrs = config.localAdrs.map((a) =>
+    a === entry ? { ...a, removed: date ?? today() } : a,
+  );
+  const nextConfig = { ...config, localAdrs };
+
+  if (!dryRun) {
+    await rm(absPath, { force: true });
+    await pruneEmptyDirs(path.dirname(absPath), targetDir);
+  }
+  if (!quiet) reportAction({ relpath, managed: false, action: 'remove' }, dryRun);
+
+  // Same refresh path as recordLocalAdr: the generated sections of the index in
+  // place, the user's prose around them untouched.
+  const plan = await buildTemplatePlan(nextConfig);
+  const readmeEntry = plan.find((e) => e.relpath === 'docs/adr/README.md');
+  const diskContents = await readDiskFiles(targetDir, [readmeEntry]);
+  const readmeActions = planUpdateActions({
+    plan: [{ ...readmeEntry, managed: true }],
+    manifest,
+    diskContents,
+    force: false,
+  });
+
+  await applyActions({ targetDir, actions: readmeActions, dryRun, quiet });
+
+  if (!dryRun) {
+    const readmeManifest = manifestFromActions({
+      plan: [{ ...readmeEntry, managed: true }],
+      actions: readmeActions,
+      previous: manifest,
+      version,
+      config: nextConfig,
+    });
+    const files = { ...manifest.files, ...readmeManifest.files };
+    delete files[relpath];
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...manifest.config, localAdrs },
+      files,
+    });
+  }
+
+  return { number: entry.number, slug: entry.slug, title: entry.title, relpath, dryRun };
 }
 
 async function applyActions({ targetDir, actions, dryRun, quiet = false }) {

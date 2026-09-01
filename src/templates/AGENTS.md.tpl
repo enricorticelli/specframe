@@ -43,18 +43,18 @@ to restore it — do not silently work around it.
 - **None of the above → write nothing.** Most changes produce no document, and
   that is the intended outcome, not a gap.
 
-### The ADR gate
-
-{{adrGate}}
-
-The long form of this, with the routing table, is in `docs/adr/README.md`.
-
 Rules and guidelines that follow from a decision carry a `Source: ADR-NNNN`
 line. Keep it: it is what makes a superseded decision traceable to everything
 it affected.
 
 Agent roles and commands (if scaffolded): see .claude/, .github/, or .codex/
 depending on the tool in use.
+
+## The ADR gate
+
+{{adrGate}}
+
+The long form of this, with the routing table, is in `docs/adr/README.md`.
 
 ## Using this alongside a spec/plan tool
 
