@@ -37,6 +37,7 @@ import {
   normalizeConfig,
   planRevisionEffects,
   recordLocalAdr,
+  removeLocalAdr,
   removeAgentTargets,
   reviseTemplateSet,
   today,
@@ -152,6 +153,9 @@ Usage:
                                   every option with its tradeoff.
   specframe adr new <slug>       Record an ADR for a decision outside the
                                   catalog — a project-specific choice.
+  specframe adr rm <number>      Withdraw one of those: an ADR that should not
+                                  have been written. Removes the file and its
+                                  index row; the number is never reissued.
   specframe revise [id]          Change a decision already recorded.
   specframe dismiss <id>         Declare a decision can never apply here — every
                                   frontend decision in a backend-only service,
@@ -227,12 +231,14 @@ Explain options:
                    its statement, consequences, tradeoff and what it emits.
                    Works before init too — there is just no repo context yet.
 
-Adr options ('adr new <slug> --title "..."'):
-      --title      Required. The ADR's title.
-  -n, --dry-run    Show what would be written, without writing it.
+Adr options ('adr new <slug> --title "..."', 'adr rm <number>'):
+      --title      Required for \`adr new\`. The ADR's title.
+  -n, --dry-run    Show what would be written or removed, without doing it.
       --json       Print { number, slug, title, relpath } instead of a message.
                    The number comes from a band (9000+) the catalog never
                    allocates, so it can never collide with a future decision.
+                   \`adr rm\` takes a number from that band only: a catalog ADR
+                   is a reserved decision, so use \`dismiss\` or \`revise\` instead.
 
 Revise options:
       --set k=v,...  Revise without prompting, e.g.
@@ -899,7 +905,8 @@ async function runAdrNew(cwd, version, flags) {
   if (flags.target !== 'new') {
     throw new Error(
       `Unknown \`adr\` subcommand: ${flags.target ?? '(none)'}\n\n` +
-        'Usage: specframe adr new <slug> --title "..."',
+        'Usage: specframe adr new <slug> --title "..."\n' +
+        '       specframe adr rm <number>',
     );
   }
   const slug = flags.target2;
@@ -933,6 +940,43 @@ async function runAdrNew(cwd, version, flags) {
       flags.dryRun
         ? '\nDry run complete. Nothing was written.'
         : '\nFill in Context, Decision, Consequences and Alternatives, then set its Status.',
+    ),
+  );
+}
+
+/**
+ * Withdraw an ADR outside the catalog — the counterpart to `adr new`, and what
+ * the audit skill runs once a document has been judged not to belong in
+ * docs/adr/. Doing this by hand means three steps (the file, the index row, the
+ * manifest entry) and forgetting any one of them leaves the log inconsistent.
+ */
+async function runAdrRemove(cwd, version, flags) {
+  const number = flags.target2;
+  if (!number || !/^\d{4,}$/.test(number)) {
+    throw new Error('Usage: specframe adr rm <number>\n\n<number> is the ADR number, e.g. 9000.');
+  }
+
+  const targetDir = await resolveTargetDir(cwd);
+  const result = await removeLocalAdr({
+    targetDir,
+    version,
+    number,
+    date: today(),
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(theme.muted(`ADR-${result.number}: ${result.title}`));
+  console.log(
+    theme.muted(
+      flags.dryRun
+        ? '\nDry run complete. Nothing was removed.'
+        : `\nWithdrawn. ADR-${result.number} will never be reissued — the number stays spent.`,
     ),
   );
 }
@@ -1725,6 +1769,10 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   if (command === 'adr') {
+    if (flags.target === 'rm') {
+      await runAdrRemove(cwd, version, flags);
+      return;
+    }
     await runAdrNew(cwd, version, flags);
     return;
   }

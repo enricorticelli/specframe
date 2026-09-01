@@ -443,12 +443,17 @@ export function renderLocalAdr({ number, title, date }) {
   ].join('\n');
 }
 
+// A removed entry keeps its place in the manifest so its number is never handed
+// out twice (see nextLocalAdrNumber), but it is gone from the repository and has
+// no business in the index — a row linking a file that is not there is worse than
+// no row.
 export function renderLocalAdrIndex(localAdrs = []) {
-  if (localAdrs.length === 0) {
+  const live = localAdrs.filter((a) => a.removed === undefined);
+  if (live.length === 0) {
     return '<!-- None recorded yet. Run `specframe adr new <slug> --title "..."`. -->';
   }
 
-  const rows = [...localAdrs]
+  const rows = [...live]
     .sort((a, b) => a.number.localeCompare(b.number))
     .map((a) => `| [ADR-${a.number}](./${a.number}-${a.slug}.md) | ${a.title} |`);
 
