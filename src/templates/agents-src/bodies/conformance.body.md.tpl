@@ -18,6 +18,7 @@ Review diffs against the decisions this repository has actually recorded — ADR
 - Error handling at boundaries; typed errors or codes.
 - No dead code, no cosmetic-only refactors.
 - Nothing in the diff answers a question still open in `docs/DECISIONS.md` — that decision should be recorded with `specframe-decide` first, not settled silently in a diff.
+- No ADR added in the diff fails the gate in `docs/adr/README.md` — no credible alternative was available, it is cheaply reversible inside one module, or a guideline already covers it. Over-recording erodes the log as fast as under-recording: name the section it belongs in instead, or say it belongs nowhere. Report as `recommended`, not `blocker`.
 
 ## Output
 

@@ -20,7 +20,9 @@
      stopped working. Write it so a reader who was not there understands the
      pressure without needing to ask. Facts, not conclusions.
 
-     If you cannot describe a force here, there may be no decision to record. -->
+     If you cannot describe a force here, there is no decision to record.
+     Same if only one option was ever credible, or if reversing the choice is
+     cheap and local: close the file. See ../adr/README.md for the gate. -->
 
 ## Decision
 

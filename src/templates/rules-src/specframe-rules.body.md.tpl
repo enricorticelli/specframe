@@ -14,8 +14,12 @@ place. Before reading or writing code, load the authoritative context:
   decisions dismissed as not applicable here.
 
 When a rule, convention, or decision is unclear, consult these documents rather
-than guessing. If you introduce a new architectural decision, enforce a new
-rule, or coin a new term, add or update the matching document under `docs/`.
+than guessing. If you enforce a new constraint or coin a new term, add or update
+the matching document under `docs/`.
+
+## Before writing an ADR
+
+{{adrGate}}
 
 If a task depends on a decision listed as open in `docs/DECISIONS.md`, raise it
 rather than choosing quietly: that choice belongs in an ADR, not in a diff. A

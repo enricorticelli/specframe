@@ -11,7 +11,7 @@ belongs, not where it feels related.
 
 | Section | Answers | Write here when |
 | --- | --- | --- |
-| [`adr/`](adr/README.md) | *What did we decide, and why?* | A choice was made between real alternatives and reversing it would be expensive. |
+| [`adr/`](adr/README.md) | *What did we decide, and why?* | A choice was made between real alternatives, reversing it would be expensive, and the code cannot explain itself. |
 | [`rules/`](rules/README.md) | *What is non-negotiable?* | Something must always or never happen, and there is a way to check it. |
 | [`guidelines/`](guidelines/README.md) | *How do we usually build this?* | There is a default way to do something, with room for judgement. |
 | [`runbook/`](runbook/README.md) | *What do we do when it breaks?* | A procedure has steps, prerequisites, and a way to verify it worked. |
@@ -31,6 +31,8 @@ makes a decision log stop being useful.
   it — CI, a linter, review — it is a **rule**.
 - If it is **what we do by default**, and a reviewer could reasonably accept a
   deviation, it is a **guideline**.
+- If it is **none of the three**, it is code. Write nothing: that is the usual
+  outcome of a change, not an omission.
 
 A single decision usually produces all three: the ADR records the choice, and
 the rules and guidelines are what that choice implies day to day. When a
