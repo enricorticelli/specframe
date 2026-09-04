@@ -22,6 +22,7 @@ import {
   askMenu,
   askQuestions,
   askRevision,
+  askUninstallPurgeSelection,
   parseAgentTargets,
   renderReview,
   splitAgentTargets,
@@ -36,6 +37,7 @@ import {
   findExistingRootFiles,
   normalizeConfig,
   planRevisionEffects,
+  previewUninstallKept,
   recordLocalAdr,
   removeLocalAdr,
   removeAgentTargets,
@@ -127,7 +129,7 @@ export function parseArgs(argv) {
     if (flags.target2 === undefined) flags.target2 = arg;
   }
 
-  return { command, flags };
+  return { command, flags, commandSeen };
 }
 
 // The blueprint list in --help. Wrapped at a fixed width rather than the
@@ -144,9 +146,13 @@ function describeBlueprint(blueprint) {
 const HELP = `specframe — decision-driven scaffolding for AI-ready repositories.
 
 Usage:
-  specframe [init] [options]     Scaffold context files at the repo root. In a
-                                  repo specframe already scaffolded, opens a
-                                  menu of what applies there instead.
+  specframe [options]             Bare, on a terminal: opens a menu of what
+                                  applies here — onboarding if this repo isn't
+                                  scaffolded yet, otherwise decide/review/
+                                  update/etc. Off a terminal, or with -y: acts
+                                  the same as \`init\`.
+  specframe init [options]        Scaffold context files at the repo root,
+                                  skipping the menu.
   specframe decide [options]     Record decisions still open in this repo.
   specframe review [options]     Show the decisions recorded here, as a table.
   specframe explain <id>         Show one decision's brief: question, context,
@@ -300,7 +306,10 @@ Update options:
   -n, --dry-run    Show what would change without writing anything.
 
 Uninstall options:
-      --purge      Also remove user-owned starters (CLAUDE.md, docs/**, …).
+      --purge      Remove every user-owned starter (AGENTS.md, CLAUDE.md,
+                   GEMINI.md, copilot-instructions.md, docs/**, …) too, with
+                   no prompt. Without it, on a terminal, you are asked which
+                   of those (if any) to remove along with the managed files.
   -n, --dry-run    Show what would be removed.
 
 Common options:
@@ -377,6 +386,37 @@ function reportAlreadyInstalled(manifest) {
   console.log(theme.muted('\nRun `specframe init --force` to re-run onboarding from scratch anyway.'));
 }
 
+// The menu's rows and preamble for a repository specframe has not scaffolded
+// yet — pure, like buildInstalledMenu below, so the copy is a test rather than
+// a claim.
+export function buildNotInstalledMenu({ version }) {
+  const preamble = [
+    `specframe ${version} is not installed here yet.`,
+    'Onboarding answers a catalog of architecture decisions and writes an ADR, ' +
+      'rules, guidelines, runbooks and glossary terms for each — plus native files ' +
+      '(agents, commands, skills) for whichever AI assistants you pick, including Claude.',
+    'Nothing is written until you reach the review step at the end of that wizard.',
+  ];
+  const options = [
+    {
+      value: 'init',
+      label: 'Start onboarding',
+      hint: 'Runs `specframe init`: pick a mode (blank/guided/blueprint), answer decisions, choose AI assistants, review, then write.',
+    },
+  ];
+  return { options, preamble };
+}
+
+// What `specframe` (bare, no subcommand) shows in a repository that is not
+// scaffolded yet: a summary of what onboarding does, with the wizard itself
+// one deliberate keystroke away — the not-yet-installed counterpart to
+// `runInstalledMenu` below. `specframe init` skips straight past this.
+async function runNotInstalledMenu(version) {
+  const { options, preamble } = buildNotInstalledMenu({ version });
+  const chosen = await askMenu({ title: 'specframe', preamble, options });
+  return chosen === 'init';
+}
+
 // What `specframe` does when the repository is already scaffolded and there is
 // somebody at the terminal: offer the operations that apply *here*, rather than
 // print the three commands it used to name and exit. The list is built from
@@ -411,7 +451,8 @@ async function runInstalledMenu(cwd, version, flags, manifest) {
     theme.muted(
       flags.purge
         ? '\n--purge: your docs, ADRs and CLAUDE.md go too.'
-        : '\nManaged files are removed; docs/, ADRs and CLAUDE.md are kept (--purge removes those too).',
+        : '\nManaged files are removed; docs/, ADRs, AGENTS.md and CLAUDE.md are kept by ' +
+            'default — the next screen offers each of those individually.',
     ),
   );
   const io = createReadlineIo();
@@ -483,7 +524,7 @@ export function buildInstalledMenu({ manifest, version }) {
   options.push({
     value: 'uninstall',
     label: 'Remove what specframe created',
-    hint: 'Managed files only by default; your docs and ADRs are kept unless you pass --purge.',
+    hint: 'Managed files by default; you are asked which user-owned files (AGENTS.md, CLAUDE.md, docs/, …) to remove too.',
   });
 
   const preamble = [
@@ -532,7 +573,7 @@ async function confirmLegacyOverwrite({ targetDir, flags, unattended }) {
   return ['y', 'yes'].includes(raw.trim().toLowerCase()) ? new Set(found) : new Set();
 }
 
-async function runInit(cwd, version, flags) {
+async function runInit(cwd, version, flags, { explicit = true } = {}) {
   const targetDir = await resolveTargetDir(cwd);
 
   const existingManifest = await readManifest(targetDir);
@@ -545,6 +586,19 @@ async function runInit(cwd, version, flags) {
     }
     await runInstalledMenu(cwd, version, flags, existingManifest);
     return;
+  }
+
+  // `specframe` typed bare — no explicit `init` — used to drop straight into
+  // the onboarding wizard, so picking an agent target mid-wizard read as the
+  // whole job when it was really one question of many; anybody who stopped
+  // before the final review wrote nothing. `specframe init` still goes
+  // straight in: typing the word is the commitment this menu exists to ask
+  // for. Guarded on there truly being no manifest (rather than just skipping
+  // the branch above) so `--force` on an already-installed repo never reports
+  // itself as uninstalled.
+  if (!explicit && !existingManifest?.config && !flags.yes && process.stdin.isTTY) {
+    const proceed = await runNotInstalledMenu(version);
+    if (!proceed) return;
   }
 
   const sources = await collectAnswerSources({
@@ -1710,7 +1764,29 @@ async function runUpdate(cwd, version, flags) {
 
 async function runUninstall(cwd, flags) {
   const targetDir = await resolveTargetDir(cwd);
-  await uninstallTemplateSet({ targetDir, purge: flags.purge, dryRun: flags.dryRun });
+
+  // `--purge` already says "everything"; off a terminal or with `-y` there is
+  // nobody to ask. Otherwise, rather than the all-or-nothing flag, offer the
+  // user-owned files (AGENTS.md, CLAUDE.md, GEMINI.md, copilot-instructions.md,
+  // docs/, …) one at a time.
+  let purgePaths;
+  if (!flags.purge && !flags.yes && process.stdin.isTTY) {
+    const kept = await previewUninstallKept({ targetDir });
+    if (kept === null) {
+      throw new Error(
+        `No .specframe/manifest.json in ${targetDir}.\n` + 'Nothing to uninstall — run `specframe init` first.',
+      );
+    }
+    if (kept.length > 0) {
+      purgePaths = await askUninstallPurgeSelection({ paths: kept });
+      if (purgePaths === null) {
+        console.log(theme.muted('\nCancelled. Nothing was removed.'));
+        return;
+      }
+    }
+  }
+
+  await uninstallTemplateSet({ targetDir, purge: flags.purge, purgePaths, dryRun: flags.dryRun });
 }
 
 // Always operate on the repository root, never on an arbitrary subdirectory.
@@ -1740,7 +1816,7 @@ async function resolveTargetDir(cwd) {
 }
 
 export async function run(argv = process.argv.slice(2)) {
-  const { command, flags } = parseArgs(argv);
+  const { command, flags, commandSeen } = parseArgs(argv);
   const cwd = process.cwd();
   const version = await getVersion();
 
@@ -1808,7 +1884,7 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   if (command === 'init') {
-    await runInit(cwd, version, flags);
+    await runInit(cwd, version, flags, { explicit: commandSeen });
     return;
   }
 

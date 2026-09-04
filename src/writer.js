@@ -1035,13 +1035,27 @@ function reportAction(action, dryRun) {
   console.log(`${actionTag(label, { dryRun })}${action.relpath}${theme.muted(suffix)}`);
 }
 
+// The user-owned files (CLAUDE.md, docs/**, …) `uninstall` would keep by
+// default in this repository — what the interactive prompt offers to purge
+// individually instead of the all-or-nothing --purge flag. Returns null when
+// there is nothing to uninstall (no manifest).
+export async function previewUninstallKept({ targetDir }) {
+  const manifest = await readManifest(targetDir);
+  if (!manifest) return null;
+  return planUninstallActions({ manifest, purge: false })
+    .filter((action) => action.action === 'keep')
+    .map((action) => action.relpath);
+}
+
 // Remove specframe-managed artifacts from a repository, leaving it as if
 // specframe had never run. By default only specframe-owned (managed) files are
 // deleted; user-owned starters (CLAUDE.md, docs/**, …) are reported as kept so
-// the user can review them — pass `purge: true` to remove those too. The
-// manifest itself is always removed at the end. Empty directories left behind
-// are pruned up to (but not including) targetDir. Returns the list of actions.
-export async function uninstallTemplateSet({ targetDir, purge = false, dryRun = false }) {
+// the user can review them — pass `purge: true` to remove those too, or
+// `purgePaths` to remove specific ones by relpath (the interactive prompt's
+// per-file picks). The manifest itself is always removed at the end. Empty
+// directories left behind are pruned up to (but not including) targetDir.
+// Returns the list of actions.
+export async function uninstallTemplateSet({ targetDir, purge = false, purgePaths, dryRun = false }) {
   const manifest = await readManifest(targetDir);
   if (!manifest) {
     throw new Error(
@@ -1050,7 +1064,7 @@ export async function uninstallTemplateSet({ targetDir, purge = false, dryRun = 
     );
   }
 
-  const actions = planUninstallActions({ manifest, purge });
+  const actions = planUninstallActions({ manifest, purge, purgePaths });
 
   for (const action of actions) {
     if (action.action === 'remove') {

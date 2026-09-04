@@ -8,6 +8,13 @@ test('the default command is init', () => {
   assert.equal(parseArgs(['-n']).command, 'init', 'a leading flag is not a command');
 });
 
+test('commandSeen tells a bare invocation from a typed `init`', () => {
+  assert.equal(parseArgs([]).commandSeen, false);
+  assert.equal(parseArgs(['-n']).commandSeen, false, 'a leading flag is still not a typed command');
+  assert.equal(parseArgs(['init']).commandSeen, true);
+  assert.equal(parseArgs(['decide']).commandSeen, true);
+});
+
 test('commands are recognised', () => {
   for (const command of ['init', 'decide', 'update', 'uninstall', 'help', 'dismiss', 'restore']) {
     assert.equal(parseArgs([command]).command, command);

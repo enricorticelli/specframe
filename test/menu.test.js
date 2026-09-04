@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildInstalledMenu } from '../src/index.js';
-import { askMenu } from '../src/prompts.js';
+import { buildInstalledMenu, buildNotInstalledMenu } from '../src/index.js';
+import { askMenu, askUninstallPurgeSelection } from '../src/prompts.js';
 import { createScriptedIo } from '../src/tui.js';
 import { AGENT_TARGET_LIST } from '../src/prompts.js';
 
@@ -96,4 +96,20 @@ test('the menu returns the chosen row, and null when quit', async () => {
   assert.equal(await askMenu({ title: 't', options, io: createScriptedIo(['q']) }), null);
   // A bare enter has no highlighted row to take when the list is typed at.
   assert.equal(await askMenu({ title: 't', options, io: createScriptedIo(['']) }), null);
+});
+
+test('a repo with no manifest offers only onboarding', () => {
+  const { options, preamble } = buildNotInstalledMenu({ version: '0.2.0' });
+  assert.deepEqual(options.map((o) => o.value), ['init']);
+  assert.match(preamble[0], /specframe 0\.2\.0 is not installed here yet\./);
+});
+
+test('the uninstall picker removes what is chosen, keeps all on a bare enter, and null on quit', async () => {
+  const paths = ['CLAUDE.md', 'AGENTS.md'];
+  assert.deepEqual(
+    await askUninstallPurgeSelection({ paths, io: createScriptedIo(['1']) }),
+    ['CLAUDE.md'],
+  );
+  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['']) }), []);
+  assert.equal(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['q']) }), null);
 });
