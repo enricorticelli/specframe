@@ -402,6 +402,12 @@ export function buildNotInstalledMenu({ version }) {
       value: 'init',
       label: 'Start onboarding',
       hint: 'Runs `specframe init`: pick a mode (blank/guided/blueprint), answer decisions, choose AI assistants, review, then write.',
+      // The one row here: enter should take it, same as every other single-choice
+      // screen in this wizard. Without this the picker's cursor starts on no row
+      // (nothing to accept), so a bare enter quits instead — which reads as the
+      // CLI hanging, since askMenu prints nothing for that case here (see the
+      // explicit "Nothing to do." below).
+      recommended: true,
     },
   ];
   return { options, preamble };
@@ -413,8 +419,12 @@ export function buildNotInstalledMenu({ version }) {
 // `runInstalledMenu` below. `specframe init` skips straight past this.
 async function runNotInstalledMenu(version) {
   const { options, preamble } = buildNotInstalledMenu({ version });
-  const chosen = await askMenu({ title: 'specframe', preamble, options });
-  return chosen === 'init';
+  const chosen = await askMenu({ title: 'specframe', preamble, options, acceptValue: 'init' });
+  if (chosen !== 'init') {
+    console.log(theme.muted('\nNothing to do.'));
+    return false;
+  }
+  return true;
 }
 
 // What `specframe` does when the repository is already scaffolded and there is
@@ -452,7 +462,7 @@ async function runInstalledMenu(cwd, version, flags, manifest) {
       flags.purge
         ? '\n--purge: your docs, ADRs and CLAUDE.md go too.'
         : '\nManaged files are removed; docs/, ADRs, AGENTS.md and CLAUDE.md are kept by ' +
-            'default — the next screen offers each of those individually.',
+            'default — the next screen offers to keep, remove or pick among them.',
     ),
   );
   const io = createReadlineIo();
