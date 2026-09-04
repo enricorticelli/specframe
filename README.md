@@ -60,6 +60,8 @@ npm install -g specframe     # then: specframe
 
 Requires **Node.js ≥ 18**. specframe always scaffolds at the **repo root** (nearest ancestor with `.git`), even from a deep subdirectory; with no `.git` it warns and falls back to the current folder. Ran it only through `npx`? The scaffolded skills fall back to `npx --yes specframe` rather than writing an ADR by hand.
 
+On a terminal, bare `specframe` in a repo it hasn't scaffolded yet opens a one-line menu first — a summary of what onboarding does, with **Start onboarding** the only row — rather than dropping straight into the wizard; `specframe init` skips that and goes straight in. Off a terminal, or with `-y`, both act the same.
+
 After the project name, package manager and agent assistants, you pick one of **three ways in**.
 
 ### Blank — templates only
@@ -350,12 +352,12 @@ Hand-edited a managed file? The new version lands beside it as `<file>.specframe
 specframe uninstall
 ```
 
-Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md`, is **kept by default** — it may hold months of your work. Empty scaffolding dirs are pruned; the repo root is never deleted.
+Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md`, is **kept by default** — it may hold months of your work. On a terminal, without `--purge`, you're then asked which of those (if any) to remove too, one at a time — rather than all-or-nothing. Empty scaffolding dirs are pruned; the repo root is never deleted.
 
 | Flag | Effect |
 | --- | --- |
 | `-n`, `--dry-run` | Preview removals. |
-| `--purge` | Also delete the user-owned starters — a clean slate. Opt-in, because that's *your* work. |
+| `--purge` | Delete every user-owned starter too, with no prompt — a clean slate. |
 
 ---
 

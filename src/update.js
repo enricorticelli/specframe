@@ -271,21 +271,26 @@ export function planAgentRemoval({
 // do — pure and fs-free so it can be tested in isolation.
 //
 // Inputs:
-//   manifest   The manifest written by a previous run (must not be null).
-//   purge      When true, remove every file specframe created, including
-//              user-owned starters (CLAUDE.md, docs/**, …). When false (the
-//              default), only specframe-managed files are removed; user-owned
-//              files are reported as kept so the user can review them.
+//   manifest    The manifest written by a previous run (must not be null).
+//   purge       When true, remove every file specframe created, including
+//               user-owned starters (CLAUDE.md, docs/**, …). When false (the
+//               default), only specframe-managed files are removed; user-owned
+//               files are reported as kept so the user can review them.
+//   purgePaths  Specific user-owned relpaths to remove alongside the managed
+//               ones, without going as far as `purge`'s everything — the
+//               interactive uninstall prompt's per-file picks. Ignored where
+//               `purge` already covers the file.
 //
 // Output: Array<{ relpath, managed, action }> where action is one of
 //   remove | keep
-export function planUninstallActions({ manifest, purge = false }) {
+export function planUninstallActions({ manifest, purge = false, purgePaths }) {
   if (!manifest?.files) return [];
 
+  const purgeSet = purgePaths ? new Set(purgePaths) : null;
   const actions = [];
   for (const [relpath, info] of Object.entries(manifest.files)) {
     const managed = info.managed === true;
-    if (managed || purge) {
+    if (managed || purge || purgeSet?.has(relpath)) {
       actions.push({ relpath, managed, action: 'remove' });
     } else {
       actions.push({ relpath, managed, action: 'keep' });

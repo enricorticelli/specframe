@@ -359,6 +359,48 @@ export async function askAgentTargets({ available, verb = 'add', io = createRead
   }
 }
 
+/**
+ * The interactive half of `specframe uninstall` without `--purge`: pick which
+ * user-owned starters (CLAUDE.md, docs/**, …) — kept by default — to remove
+ * too, one at a time, instead of the all-or-nothing flag.
+ *
+ * @param {string[]} paths  user-owned relpaths `uninstall` would otherwise keep.
+ * @returns {string[]|null} relpaths to also remove ([] keeps all of them),
+ *   or null when the user quit — cancelling the whole uninstall.
+ */
+export async function askUninstallPurgeSelection({ paths, io = createReadlineIo() }) {
+  const options = paths.map((relpath) => ({ value: relpath, label: relpath }));
+  const width = terminalWidth();
+  try {
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle('User-owned files', { width }),
+        ...wrapText(
+          'Kept by default so you can review them first. Pick any number to remove them ' +
+            'along with the managed files being uninstalled.',
+          width,
+          '  ',
+        ).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options,
+      multi: true,
+      keys: [['1,2', 'pick several'], ['enter', 'keep all'], ['q', 'cancel uninstall']],
+      pickerKeys: [
+        [MOVE_KEY(), 'move'],
+        ['space', 'mark'],
+        ['enter', 'keep all'],
+        ['q', 'cancel uninstall'],
+      ],
+    });
+    if (choice.kind === CONTROL.QUIT) return null;
+    if (choice.kind === CONTROL.SELECT) return choice.values.map((n) => options[n - 1].value);
+    return []; // ACCEPT: nothing marked — keep every user-owned file.
+  } finally {
+    io.close();
+  }
+}
+
 async function askMode(io) {
   const width = terminalWidth();
   const choice = await askChoice(io, {

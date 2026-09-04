@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { planUninstallActions } from '../src/update.js';
-import { writeTemplateSet, uninstallTemplateSet } from '../src/writer.js';
+import { writeTemplateSet, uninstallTemplateSet, previewUninstallKept } from '../src/writer.js';
 import { readManifest } from '../src/manifest.js';
 
 const CONFIG = {
@@ -69,6 +69,22 @@ test('planUninstallActions returns [] when there is no manifest', () => {
   assert.deepEqual(planUninstallActions({ manifest: { files: {} } }), []);
 });
 
+test('planUninstallActions with purgePaths removes only the named user-owned files', () => {
+  const manifest = {
+    version: '0.1.0',
+    files: {
+      [MANAGED_AGENT]: { sha256: 'x', managed: true },
+      [CLAUDE_MD]: { sha256: 'y', managed: false },
+      'AGENTS.md': { sha256: 'z', managed: false },
+    },
+  };
+  const actions = planUninstallActions({ manifest, purgePaths: [CLAUDE_MD] });
+  const byRel = Object.fromEntries(actions.map((a) => [a.relpath, a.action]));
+  assert.equal(byRel[MANAGED_AGENT], 'remove', 'managed files always go');
+  assert.equal(byRel[CLAUDE_MD], 'remove', 'named in purgePaths');
+  assert.equal(byRel['AGENTS.md'], 'keep', 'not named, so kept');
+});
+
 // --- fs behaviour ----------------------------------------------------------
 
 test('uninstall removes managed files and the manifest, leaves user-owned', async () => {
@@ -113,6 +129,41 @@ test('uninstall --dry-run removes nothing', async () => {
     assert.equal(await exists(abs(dir, '.specframe/manifest.json')), true, 'manifest untouched');
     const manifest = await readManifest(dir);
     assert.equal(manifest.version, '0.1.0', 'manifest intact');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('uninstall with purgePaths removes only the named user-owned files', async () => {
+  const dir = await makeRepo();
+  try {
+    await uninstallTemplateSet({ targetDir: dir, purgePaths: [CLAUDE_MD] });
+
+    assert.equal(await exists(abs(dir, MANAGED_AGENT)), false, 'managed file removed');
+    assert.equal(await exists(abs(dir, CLAUDE_MD)), false, 'named user-owned file removed');
+    assert.equal(await exists(abs(dir, 'AGENTS.md')), true, 'AGENTS.md kept — not named');
+    assert.equal(await exists(abs(dir, 'docs/adr/README.md')), true, 'docs kept — not named');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('previewUninstallKept lists the user-owned files that would be kept', async () => {
+  const dir = await makeRepo();
+  try {
+    const kept = await previewUninstallKept({ targetDir: dir });
+    assert.ok(kept.includes(CLAUDE_MD));
+    assert.ok(kept.includes('AGENTS.md'));
+    assert.ok(!kept.includes(MANAGED_AGENT), 'managed files are not "kept"');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('previewUninstallKept returns null when there is no manifest', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sf-empty-'));
+  try {
+    assert.equal(await previewUninstallKept({ targetDir: dir }), null);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
