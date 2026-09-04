@@ -22,6 +22,37 @@ const run = (lines, options = {}) =>
     ...options,
   });
 
+test('picking no agent assistant asks to confirm, and a "no" loops back to pick one', async () => {
+  const config = await askQuestions({
+    io: createScriptedIo([
+      '', // project name: accept default
+      '', // package manager: accept default (npm)
+      '', // agent assistants: nothing marked -> "none"
+      'n', // decline "continue with none?" -> re-asks
+      '1', // agent assistants, second pass: pick option 1 (claude)
+    ]),
+    seed: { projectName: 'acme' },
+    mode: 'blank',
+    basics: true,
+  });
+  assert.deepEqual(config.agentTargets, ['claude']);
+});
+
+test('picking no agent assistant twice, then confirming, proceeds with none', async () => {
+  const config = await askQuestions({
+    io: createScriptedIo([
+      '', // project name
+      '', // package manager
+      '', // agent assistants: nothing marked
+      'y', // confirm "continue with none?"
+    ]),
+    seed: { projectName: 'acme' },
+    mode: 'blank',
+    basics: true,
+  });
+  assert.deepEqual(config.agentTargets, []);
+});
+
 test('parseAgentTargets accepts the known targets and drops the rest', () => {
   assert.deepEqual(parseAgentTargets('claude, gemini, bogus'), ['claude', 'gemini']);
   assert.deepEqual(parseAgentTargets('none'), []);

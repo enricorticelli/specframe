@@ -98,18 +98,38 @@ test('the menu returns the chosen row, and null when quit', async () => {
   assert.equal(await askMenu({ title: 't', options, io: createScriptedIo(['']) }), null);
 });
 
-test('a repo with no manifest offers only onboarding', () => {
+test('a repo with no manifest offers only onboarding, and enter takes it', () => {
   const { options, preamble } = buildNotInstalledMenu({ version: '0.2.0' });
   assert.deepEqual(options.map((o) => o.value), ['init']);
+  assert.equal(options[0].recommended, true);
   assert.match(preamble[0], /specframe 0\.2\.0 is not installed here yet\./);
 });
 
-test('the uninstall picker removes what is chosen, keeps all on a bare enter, and null on quit', async () => {
+test('askMenu resolves a bare enter to acceptValue, but quit always wins', async () => {
+  const options = [{ value: 'go', label: 'Go', recommended: true }];
+  assert.equal(await askMenu({ title: 't', options, acceptValue: 'go', io: createScriptedIo(['']) }), 'go');
+  assert.equal(await askMenu({ title: 't', options, acceptValue: 'go', io: createScriptedIo(['q']) }), null);
+  // No acceptValue given: unchanged default behaviour (a bare enter quits).
+  assert.equal(await askMenu({ title: 't', options, io: createScriptedIo(['']) }), null);
+});
+
+test('the uninstall prompt offers keep all / remove all / choose, in that order', async () => {
   const paths = ['CLAUDE.md', 'AGENTS.md'];
+  // 1) keep all
+  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['1']) }), []);
+  // a bare enter at the top also defaults to keeping everything
+  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['']) }), []);
+  // 2) remove all — the bulk option the per-file checklist made hard to reach
+  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['2']) }), paths);
+  // 3) choose individually, then pick one from the per-file list
   assert.deepEqual(
-    await askUninstallPurgeSelection({ paths, io: createScriptedIo(['1']) }),
+    await askUninstallPurgeSelection({ paths, io: createScriptedIo(['3', '1']) }),
     ['CLAUDE.md'],
   );
-  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['']) }), []);
+  // choosing individually and marking nothing keeps everything
+  assert.deepEqual(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['3', '']) }), []);
+  // quitting at the top level cancels the whole uninstall
   assert.equal(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['q']) }), null);
+  // quitting from the per-file list also cancels
+  assert.equal(await askUninstallPurgeSelection({ paths, io: createScriptedIo(['3', 'q']) }), null);
 });

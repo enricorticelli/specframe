@@ -352,7 +352,7 @@ Hand-edited a managed file? The new version lands beside it as `<file>.specframe
 specframe uninstall
 ```
 
-Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md`, is **kept by default** — it may hold months of your work. On a terminal, without `--purge`, you're then asked which of those (if any) to remove too, one at a time — rather than all-or-nothing. Empty scaffolding dirs are pruned; the repo root is never deleted.
+Removes the files specframe **owns**, then the manifest. Your decision log in `docs/**`, plus `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` / `copilot-instructions.md`, is **kept by default** — it may hold months of your work. On a terminal, without `--purge`, you're then asked what to do with those: keep them all, remove them all, or pick specific ones. Empty scaffolding dirs are pruned; the repo root is never deleted.
 
 | Flag | Effect |
 | --- | --- |

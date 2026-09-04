@@ -255,31 +255,50 @@ async function askProjectBasics(io, seed) {
   const packageManager =
     pmChoice.kind === CONTROL.SELECT ? PACKAGE_MANAGERS[pmChoice.values[0] - 1].value : 'npm';
 
-  const agentChoice = await askChoice(io, {
-    preamble: [
-      sectionTitle('Agent assistants', { width }),
-      ...wrapText(
-        `AGENTS.md is always generated and covers most tools. These add each tool's native files on top. Pick any number.`,
-        width,
-        '  ',
-      ).map((line) => theme.muted(line)),
-      '',
-    ].join('\n'),
-    options: AGENT_TARGETS,
-    multi: true,
-    keys: [['1,2', 'pick several'], ['enter', 'none'], ['?', 'what each one gets']],
-    pickerKeys: [
-      [MOVE_KEY(), 'move'],
-      ['space', 'mark'],
-      ['enter', 'none'],
-      ['?', 'what each one gets'],
-    ],
-    help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
-  });
-  const agentTargets =
-    agentChoice.kind === CONTROL.SELECT
-      ? agentChoice.values.map((n) => AGENT_TARGETS[n - 1].value)
-      : [];
+  // A checkbox list with nothing pre-marked: moving the cursor onto "Claude"
+  // highlights it but does not mark it, so enter there still means "none" — a
+  // very easy accident, since every other question in this wizard treats
+  // enter as "take what's on the screen." The hint bar says `enter → none`,
+  // but a confirm is what actually catches it: worth interrupting for, since
+  // that outcome is silent otherwise — no error, no native files, until
+  // someone asks Claude Code for a skill it never got.
+  let agentTargets = [];
+  for (;;) {
+    const agentChoice = await askChoice(io, {
+      preamble: [
+        sectionTitle('Agent assistants', { width }),
+        ...wrapText(
+          `AGENTS.md is always generated and covers most tools. These add each tool's native files on top. Pick any number.`,
+          width,
+          '  ',
+        ).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options: AGENT_TARGETS,
+      multi: true,
+      keys: [['1,2', 'pick several'], ['enter', 'none'], ['?', 'what each one gets']],
+      pickerKeys: [
+        [MOVE_KEY(), 'move'],
+        ['space', 'mark'],
+        ['enter', 'none'],
+        ['?', 'what each one gets'],
+      ],
+      help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+    });
+    agentTargets =
+      agentChoice.kind === CONTROL.SELECT
+        ? agentChoice.values.map((n) => AGENT_TARGETS[n - 1].value)
+        : [];
+    if (agentTargets.length > 0) break;
+
+    io.log('');
+    io.log(theme.warn('  No assistant marked — only AGENTS.md will be generated, no Claude/Copilot/Codex files.'));
+    const raw = await io.question(
+      `${theme.accent(theme.glyph.prompt)} Continue with none? [y/N] (n picks again, this time with space) `,
+    );
+    if (['y', 'yes'].includes(raw.trim().toLowerCase())) break;
+    io.log('');
+  }
 
   return { projectName, packageManager, agentTargets };
 }
@@ -289,11 +308,21 @@ async function askProjectBasics(io, seed) {
  * already scaffolded. Built by the caller from what this repo actually has, so
  * the list never offers revising decisions in a repo with none.
  *
- * @param {{value: string, label: string, hint?: string}[]} options
+ * No option here has ever been `recommended`, on purpose: which of these is
+ * "the" default action does not generalise, so a bare enter has nothing to
+ * accept and quits — `acceptValue` exists for the one caller where a single
+ * option genuinely is the default (the not-yet-installed menu below), so its
+ * enter can behave like every other single-choice screen in this wizard
+ * instead of quitting silently.
+ *
+ * @param {{value: string, label: string, hint?: string, recommended?: boolean}[]} options
  * @param {string[]} preamble  lines shown above the list, already sentence-shaped.
+ * @param {*} [acceptValue]  what a bare enter (nothing highlighted, or the
+ *   recommended row left untouched) resolves to. Quitting with `q` always
+ *   returns null regardless.
  * @returns {string|null} the chosen value, or null when the user quit.
  */
-export async function askMenu({ title, preamble = [], options, io = createReadlineIo() }) {
+export async function askMenu({ title, preamble = [], options, io = createReadlineIo(), acceptValue = null }) {
   const width = terminalWidth();
   try {
     const choice = await askChoice(io, {
@@ -310,7 +339,9 @@ export async function askMenu({ title, preamble = [], options, io = createReadli
       pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'run it'], ['q', 'quit'], ['?', 'what each one does']],
       help: options.map((option) => `${option.label}\n  ${option.hint ?? ''}`.trimEnd()).join('\n\n'),
     });
-    return choice.kind === CONTROL.SELECT ? options[choice.values[0] - 1].value : null;
+    if (choice.kind === CONTROL.SELECT) return options[choice.values[0] - 1].value;
+    if (choice.kind === CONTROL.ACCEPT) return acceptValue;
+    return null; // quit
   } finally {
     io.close();
   }
@@ -359,28 +390,53 @@ export async function askAgentTargets({ available, verb = 'add', io = createRead
   }
 }
 
+const UNINSTALL_PURGE_CHOICES = [
+  { value: 'keep', label: 'Keep them all', hint: 'The default: only the managed files (agents, commands, skills, rules) go.' },
+  { value: 'purge', label: 'Remove them all', hint: 'Same as --purge: every user-owned starter goes too — a clean slate.' },
+  { value: 'choose', label: 'Choose individually', hint: 'Pick specific files to remove, leaving the rest.' },
+];
+
 /**
- * The interactive half of `specframe uninstall` without `--purge`: pick which
- * user-owned starters (CLAUDE.md, docs/**, …) — kept by default — to remove
- * too, one at a time, instead of the all-or-nothing flag.
+ * The interactive half of `specframe uninstall` without `--purge`: what to do
+ * with the user-owned starters (CLAUDE.md, docs/**, …) that would otherwise be
+ * kept. A three-way choice first — keep all, remove all, or pick individually
+ * — because a repo scaffolded in `guided` mode can have twenty-plus of these,
+ * and marking each one by hand is the kind of tedium that reads as the CLI
+ * being stuck.
  *
  * @param {string[]} paths  user-owned relpaths `uninstall` would otherwise keep.
  * @returns {string[]|null} relpaths to also remove ([] keeps all of them),
  *   or null when the user quit — cancelling the whole uninstall.
  */
 export async function askUninstallPurgeSelection({ paths, io = createReadlineIo() }) {
-  const options = paths.map((relpath) => ({ value: relpath, label: relpath }));
   const width = terminalWidth();
   try {
-    const choice = await askChoice(io, {
+    const top = await askChoice(io, {
       preamble: [
         sectionTitle('User-owned files', { width }),
         ...wrapText(
-          'Kept by default so you can review them first. Pick any number to remove them ' +
-            'along with the managed files being uninstalled.',
+          `${paths.length} file(s) — AGENTS.md, CLAUDE.md, docs/**, … — are kept by default. ` +
+            'What should happen to them?',
           width,
           '  ',
         ).map((line) => theme.muted(line)),
+        '',
+      ].join('\n'),
+      options: UNINSTALL_PURGE_CHOICES,
+      keys: [['enter', 'keep them all'], ['q', 'cancel uninstall']],
+      pickerKeys: [[MOVE_KEY(), 'move'], ['enter', 'keep them all'], ['q', 'cancel uninstall']],
+      help: UNINSTALL_PURGE_CHOICES.map((option) => `${option.label}\n  ${option.hint}`).join('\n\n'),
+    });
+    if (top.kind === CONTROL.QUIT) return null;
+    const picked = top.kind === CONTROL.SELECT ? UNINSTALL_PURGE_CHOICES[top.values[0] - 1].value : 'keep';
+    if (picked === 'keep') return [];
+    if (picked === 'purge') return [...paths];
+
+    const options = paths.map((relpath) => ({ value: relpath, label: relpath }));
+    const choice = await askChoice(io, {
+      preamble: [
+        sectionTitle('Files to remove', { width }),
+        ...wrapText('Pick any number.', width, '  ').map((line) => theme.muted(line)),
         '',
       ].join('\n'),
       options,
