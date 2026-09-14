@@ -35,11 +35,18 @@ to restore it — do not silently work around it.
 
 ## When something new emerges
 
+Run the ADR gate below **first**, before naming any destination. The gate
+decides whether a document exists at all; only then does one get a name.
+
 - A choice that passes the ADR gate below → draft an ADR in `docs/adr/`.
 - A constraint with no acceptable exception → draft a rule in `docs/rules/`.
 - A new default way of doing something → draft a guideline in `docs/guidelines/`.
 - A missing operational procedure → draft a runbook in `docs/runbook/`.
 - A term that means something specific here → add it to `docs/glossary/`.
+- **A choice that is the user's to make** — product, budget, risk appetite, not
+  a technical trade-off → **no document.** Ask them and wait. Every other row
+  here ends in a file, which is why this one has to be said: an agent that
+  recognises "this is not mine to decide" otherwise files it as an ADR.
 - **None of the above → write nothing.** Most changes produce no document, and
   that is the intended outcome, not a gap.
 

@@ -25,6 +25,7 @@ If any one of the three fails, there is no ADR. Where it goes instead:
 | A term that means something specific here | the glossary |
 | One credible option only — the obvious way, or the only way | nowhere |
 | Cheaply reversible inside the module it lives in | nowhere |
+| A product, budget, or risk choice that is the user's to make | no document — ask them |
 
 **Nowhere is a legitimate outcome, and the most common one.** Naming, file
 layout, which helper to call, how a function is structured, a library used in one

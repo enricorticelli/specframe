@@ -16,6 +16,7 @@ belongs, not where it feels related.
 | [`guidelines/`](guidelines/README.md) | *How do we usually build this?* | There is a default way to do something, with room for judgement. |
 | [`runbook/`](runbook/README.md) | *What do we do when it breaks?* | A procedure has steps, prerequisites, and a way to verify it worked. |
 | [`glossary/`](glossary/README.md) | *What do words mean here?* | A term means something specific in this domain, or two terms are being confused. |
+| *(no section)* | *Whose call is this?* | The choice is the user's — product, budget, risk appetite. It produces no document: ask, and wait. |
 
 [`DECISIONS.md`](DECISIONS.md) tracks the decisions that have **not** been taken
 yet — the backlog that feeds `adr/`.
@@ -33,6 +34,8 @@ makes a decision log stop being useful.
   deviation, it is a **guideline**.
 - If it is **none of the three**, it is code. Write nothing: that is the usual
   outcome of a change, not an omission.
+- If it is **not yours to decide** — the trade-off is the user's, not a
+  technical one — no document is the answer. Ask, and wait for the answer.
 
 A single decision usually produces all three: the ADR records the choice, and
 the rules and guidelines are what that choice implies day to day. When a
