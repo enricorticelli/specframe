@@ -69,7 +69,10 @@ const ADR_GATE_NOTE =
   'it: a default with room for judgement is a guideline, a constraint with no\n' +
   'acceptable exception is a rule, a procedure is a runbook, a term belongs in the\n' +
   'glossary — and a reversible implementation detail is none of them, so **writing\n' +
-  'nothing is the correct outcome.** Naming, file layout, which helper to call, a\n' +
+  'nothing is the correct outcome.** One destination is not a file at all: if the\n' +
+  'trade-off is the **user\'s to make** — product, budget, risk appetite — no\n' +
+  'document is the answer. Ask them, and write nothing until they answer. Do not\n' +
+  'record an ADR to park the question. Naming, file layout, which helper to call, a\n' +
   'library used in one place and swappable in an afternoon: that is code, not a\n' +
   'decision. An ADR for one of those costs more than it records — it dilutes the\n' +
   'log until an ADR stops meaning anything.';
