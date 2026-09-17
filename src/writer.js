@@ -284,6 +284,7 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-conform', description: 'Review current changes against ADRs/rules/guidelines.', body: 'specframe-conform-command' },
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
     { name: 'specframe-audit', description: 'Audit every document under docs/ against the gate its own section publishes, and report what does not belong.' },
+    { name: 'specframe-do', description: 'Carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
   ],
   skills: [
     { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
@@ -291,6 +292,9 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-conform', description: 'Auto-trigger on diff/PR review: verify compliance with enforced rules.', body: 'specframe-conform-check' },
     { name: 'specframe-doc-sync', description: 'Auto-trigger when a new convention, term, or procedure emerges without a matching doc.' },
     { name: 'specframe-audit', description: 'Auto-trigger when asked whether the docs are compliant: judge every existing document against its section gate. Reviews the standing log, not a diff.' },
+    // Explicit-invocation only, unlike its four siblings: the description carries
+    // no auto-trigger clause on purpose. Asking for it is the opt-in.
+    { name: 'specframe-do', description: 'Invoked explicitly to carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
   ],
 };
 

@@ -21,6 +21,6 @@
   make — product, budget, risk appetite — the answer is none of the above: ask,
   and write nothing until they answer.
 - If a new convention, rule, procedure, or term emerges, draft the matching doc.
-- Slash commands available when scaffolded: /specframe-decide (record a decision), /specframe-conform (review against ADRs/rules/guidelines), /specframe-bootstrap (populate docs from an existing codebase), /specframe-audit (judge the existing docs against their section gates).
-- Skills available when scaffolded (Claude only): specframe-decide, specframe-record, specframe-conform, specframe-doc-sync, specframe-audit.
+- Slash commands available when scaffolded: /specframe-decide (record a decision), /specframe-conform (review against ADRs/rules/guidelines), /specframe-bootstrap (populate docs from an existing codebase), /specframe-audit (judge the existing docs against their section gates), /specframe-do (implement a task under the enforced rules and recorded ADRs).
+- Skills available when scaffolded (Claude only): specframe-decide, specframe-record, specframe-conform, specframe-doc-sync, specframe-audit, specframe-do (explicit invocation only).
 - Using Spec Kit, BMAD, OpenSpec, or a similar harness alongside this? See docs/INTEROP.md — it owns the spec and the plan, this scaffold owns the decision.
