@@ -34,15 +34,13 @@ import {
   parseTextInput,
 } from './tui.js';
 
-// Triad agents get full subagents/commands/skills; rules agents get a single
-// native rules file that points back at AGENTS.md + docs/.
+// Only harnesses that support subagents, commands and skills. specframe writes
+// no context file any more, so a tool that can only read one has nothing to be
+// given: it reads `docs/` directly, like a human does.
 const AGENT_TARGETS = [
   { value: 'claude', label: 'Claude', hint: '.claude/agents, .claude/commands, .claude/skills' },
   { value: 'copilot', label: 'GitHub Copilot', hint: '.github/agents, .github/prompts' },
   { value: 'codex', label: 'Codex', hint: '.codex/agents (TOML), .agents/skills' },
-  { value: 'gemini', label: 'Gemini', hint: 'GEMINI.md pointer' },
-  { value: 'continue', label: 'Continue', hint: '.continue/rules/specframe.md' },
-  { value: 'amazonq', label: 'Amazon Q', hint: '.amazonq/rules/specframe.md' },
 ];
 
 const VALID_AGENT_TARGETS = new Set(AGENT_TARGETS.map((t) => t.value));
@@ -268,7 +266,7 @@ async function askProjectBasics(io, seed) {
       preamble: [
         sectionTitle('Agent assistants', { width }),
         ...wrapText(
-          `AGENTS.md is always generated and covers most tools. These add each tool's native files on top. Pick any number.`,
+          `Each one gets subagents, slash commands and skills that read docs/ directly. Pick any number.`,
           width,
           '  ',
         ).map((line) => theme.muted(line)),
@@ -283,7 +281,7 @@ async function askProjectBasics(io, seed) {
         ['enter', 'none'],
         ['?', 'what each one gets'],
       ],
-      help: 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+      help: 'Each receives subagents, slash commands and skills wired to the decision log under docs/.',
     });
     agentTargets =
       agentChoice.kind === CONTROL.SELECT
@@ -292,7 +290,7 @@ async function askProjectBasics(io, seed) {
     if (agentTargets.length > 0) break;
 
     io.log('');
-    io.log(theme.warn('  No assistant marked — only AGENTS.md will be generated, no Claude/Copilot/Codex files.'));
+    io.log(theme.warn('  No assistant marked — docs/ is scaffolded, but no Claude/Copilot/Codex files.'));
     const raw = await io.question(
       `${theme.accent(theme.glyph.prompt)} Continue with none? [y/N] (n picks again, this time with space) `,
     );
@@ -361,8 +359,8 @@ export async function askAgentTargets({ available, verb = 'add', io = createRead
   const width = terminalWidth();
   const blurb =
     verb === 'remove'
-      ? 'Each one drops that tool\'s native files. AGENTS.md, docs/ and the decision log stay exactly as they are. Pick any number.'
-      : 'Each one adds that tool\'s native files, pointing at the AGENTS.md and docs/ already in this repository. Pick any number.';
+      ? 'Each one drops that tool\'s native files. docs/ and the decision log stay exactly as they are. Pick any number.'
+      : 'Each one adds that tool\'s native files, wired to the docs/ already in this repository. Pick any number.';
   try {
     const choice = await askChoice(io, {
       preamble: [
@@ -381,8 +379,8 @@ export async function askAgentTargets({ available, verb = 'add', io = createRead
       ],
       help:
         verb === 'remove'
-          ? 'Only that tool\'s own files go. A managed file you edited by hand is kept, and so is a file that is yours to own (GEMINI.md) — the report names them.'
-          : 'Claude, Copilot and Codex receive subagents, slash commands and skills.\nGemini, Continue and Amazon Q receive a single rules file pointing back at AGENTS.md.',
+          ? 'Only that tool\'s own files go. A managed file you edited by hand is kept — the report names it.'
+          : 'Each receives subagents, slash commands and skills wired to the decision log under docs/.',
     });
     return choice.kind === CONTROL.SELECT ? choice.values.map((n) => options[n - 1].value) : null;
   } finally {
@@ -415,7 +413,7 @@ export async function askUninstallPurgeSelection({ paths, io = createReadlineIo(
       preamble: [
         sectionTitle('User-owned files', { width }),
         ...wrapText(
-          `${paths.length} file(s) — AGENTS.md, CLAUDE.md, docs/**, … — are kept by default. ` +
+          `${paths.length} file(s) — docs/**, … — are kept by default. ` +
             'What should happen to them?',
           width,
           '  ',

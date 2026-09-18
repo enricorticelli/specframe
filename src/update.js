@@ -203,9 +203,10 @@ export function planUpdateActions({
  * The rule is `uninstall`'s, narrowed to one harness's files: specframe removes
  * what it owns and wrote, and never quietly deletes what somebody has written
  * in. A managed file edited by hand is therefore kept and reported, and the
- * harness's user-owned file (GEMINI.md is the one) is kept unless `purge` says
- * otherwise — the whole point of that file is that it is yours to extend, and
- * changing your mind about which assistant reads it is no reason to lose it.
+ * a file the manifest records as user-owned is kept unless `purge` says
+ * otherwise. No harness contributes one any more — specframe stopped writing
+ * per-tool context files — but a repository scaffolded before that still has
+ * one tracked, and dropping its harness must not silently delete it.
  *
  * Inputs:
  *   relpaths     the files the dropped harness(es) contributed.
@@ -273,7 +274,7 @@ export function planAgentRemoval({
 // Inputs:
 //   manifest    The manifest written by a previous run (must not be null).
 //   purge       When true, remove every file specframe created, including
-//               user-owned starters (CLAUDE.md, docs/**, …). When false (the
+//               user-owned starters (docs/**, …). When false (the
 //               default), only specframe-managed files are removed; user-owned
 //               files are reported as kept so the user can review them.
 //   purgePaths  Specific user-owned relpaths to remove alongside the managed

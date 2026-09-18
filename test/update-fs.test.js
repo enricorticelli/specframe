@@ -16,7 +16,9 @@ const CONFIG = {
 };
 
 const MANAGED_AGENT = '.claude/agents/bootstrapper.md';
-const CLAUDE_MD = 'CLAUDE.md';
+// A file specframe writes once and never owns again — the user-owned half of
+// every ownership assertion below.
+const USER_OWNED = 'docs/README.md';
 
 async function makeRepo() {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'specframe-'));
@@ -48,9 +50,10 @@ test('init writes a manifest capturing version and config', async () => {
       revisions: {},
       dismissed: {},
       localAdrs: [],
+      localDocs: { rule: [], guideline: [], runbook: [], glossary: [] },
     });
     assert.ok(manifest.files[MANAGED_AGENT].managed, 'bootstrapper is managed');
-    assert.equal(manifest.files[CLAUDE_MD].managed, false, 'CLAUDE.md is user-owned');
+    assert.equal(manifest.files[USER_OWNED].managed, false, 'docs/README.md is user-owned');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -70,9 +73,9 @@ test('update recreates a deleted managed file', async () => {
 test('update never clobbers a user-edited user-owned file', async () => {
   const dir = await makeRepo();
   try {
-    await writeFile(abs(dir, CLAUDE_MD), 'months of my own work', 'utf8');
+    await writeFile(abs(dir, USER_OWNED), 'months of my own work', 'utf8');
     await updateTemplateSet({ targetDir: dir, ...CONFIG, version: '0.2.0' });
-    assert.equal(await readFile(abs(dir, CLAUDE_MD), 'utf8'), 'months of my own work');
+    assert.equal(await readFile(abs(dir, USER_OWNED), 'utf8'), 'months of my own work');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -130,14 +133,14 @@ test('update records the hash it wrote, not the one it skipped', async () => {
   // and `decide` then reports a conflict on a file nobody has touched.
   const dir = await makeRepo();
   try {
-    const asWritten = await readFile(abs(dir, 'AGENTS.md'), 'utf8');
-    await writeFile(abs(dir, 'AGENTS.md'), 'my own AGENTS.md', 'utf8');
+    const asWritten = await readFile(abs(dir, USER_OWNED), 'utf8');
+    await writeFile(abs(dir, USER_OWNED), 'my own decision log readme', 'utf8');
 
     // A different project name makes this version's plan differ from the file
     // on disk, the way a template change between releases would.
     await updateTemplateSet({ targetDir: dir, ...CONFIG, projectName: 'renamed', version: '0.2.0' });
 
-    const entry = (await readManifest(dir)).files['AGENTS.md'];
+    const entry = (await readManifest(dir)).files[USER_OWNED];
     assert.equal(entry.sha256, sha256(asWritten), 'still the version specframe wrote');
   } finally {
     await rm(dir, { recursive: true, force: true });

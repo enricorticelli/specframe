@@ -1,8 +1,9 @@
 # {{projectName}} — decision log
 
 This directory is the source of truth for how {{projectName}} is built and why.
-It is written for humans and read by agents: `AGENTS.md` at the repository root
-points every AI assistant here before it touches code.
+It is written for humans and read by agents: every AI assistant reaches it
+through the commands and skills specframe installs, which read these files at
+the moment they run rather than a copy of them kept somewhere else.
 
 ## The five sections
 

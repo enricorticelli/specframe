@@ -17,6 +17,9 @@ import {
   renderGuidelinesIndex,
   renderLocalAdr,
   renderLocalAdrIndex,
+  renderLocalDoc,
+  renderLocalDocIndex,
+  LOCAL_DOC_SECTIONS,
   renderOpenDecisions,
   renderRule,
   renderRulesIndex,
@@ -104,25 +107,12 @@ function actionTag(label, { dryRun = false } = {}) {
   return prefix + pad(tone(`[${label}]`), 11);
 }
 
-// AGENTS.md is the one root file that carries a generated section. The ADR gate
-// has to reach repositories scaffolded before it existed, and AGENTS.md is
-// user-owned: without this, `update` reports `[keep] your file` and the file
-// every agent reads first keeps the version of the instruction that had no
-// threshold at all. `## When something new emerges` is listed with it because
-// mergeGeneratedSections needs an anchor that already exists on disk to insert
-// a brand-new heading after — see its doc comment in update.js. That makes the
-// routing list specframe's to rewrite, which is the point: it is the list that
-// was wrong. Not `regenerable` — the gate is static, so `update` is the only
-// thing that needs to carry it, not every `decide` and `revise`.
-const AGENTS_SECTIONS = ['## When something new emerges', '## The ADR gate'];
-
+// The only root file specframe still writes. Agent context is not scaffolded as
+// a file any more — no AGENTS.md, no CLAUDE.md, no per-tool pointer: `docs/` is
+// the source of truth and the commands and skills under AGENT_TEMPLATES are how
+// an agent reaches it. A pointer file is a copy that goes stale; a command reads
+// the log at the moment it runs.
 const TEMPLATE_TARGETS = [
-  { template: 'AGENTS.md.tpl', target: 'AGENTS.md', generated: AGENTS_SECTIONS },
-  { template: 'CLAUDE.md.tpl', target: 'CLAUDE.md' },
-  {
-    template: 'copilot-instructions.md.tpl',
-    target: '.github/copilot-instructions.md',
-  },
   { template: 'pr-template.md.tpl', target: '.github/pull_request_template.md' },
 ];
 
@@ -136,11 +126,14 @@ const TEMPLATE_TARGETS = [
 // names the headings of the part specframe renders in each: everything else in
 // them is prose the user is invited to rewrite, and a refresh has to be able to
 // land without touching it.
-const INDEX_SECTION = ['## Index'];
+// Two generated sections in every section index now: the catalog's documents,
+// and the ones `specframe doc new` recorded here. `## Added here` is new to
+// repositories scaffolded before that command existed — mergeGeneratedSections
+// inserts it after `## Index`, which is why the order below is document order.
+const INDEX_SECTION = ['## Index', '## Added here'];
 // `## When to write one` is the canonical long form of the ADR gate, and it is
-// listed here for the same reason AGENTS.md carries one: it has to reach repos
-// scaffolded before the gate was tightened. Unlike AGENTS.md's new heading it
-// needs no anchor — every adr/README.md ever written already has it — but the
+// listed here because it has to reach repos scaffolded before the gate was
+// tightened. It needs no anchor — every adr/README.md ever written already has it — but the
 // order here must stay document order, ahead of the two indexes.
 const ADR_README_SECTIONS = ['## When to write one', '## Index', '## Decisions outside the catalog'];
 // The third heading is new as of the `dismissed` state and absent from every
@@ -175,6 +168,16 @@ const CONTENT_TARGETS = [
   { template: 'glossary-0001-example.md.tpl', target: 'docs/glossary/0001-example.md', blankOnly: true },
 ];
 
+// The section key CONTENT_TARGETS uses, mapped to the `doc new` section name.
+// They differ in exactly one place — the runbook directory is singular and its
+// index renderer is plural — and one map is cheaper than renaming either.
+const LOCAL_DOC_FOR_SECTION = {
+  rules: 'rule',
+  guidelines: 'guideline',
+  runbooks: 'runbook',
+  glossary: 'glossary',
+};
+
 const SECTION_INDEX_RENDERERS = {
   adr: renderAdrIndex,
   rules: renderRulesIndex,
@@ -207,11 +210,18 @@ const AGENT_ADAPTERS = {
   },
   copilot: {
     agentPath: (name) => `.github/agents/${name}.agent.md`,
+    // Copilot has no skills; a prompt is the closest thing it has, and the
+    // same path as its commands on purpose. A workflow shipped as both — and
+    // every skill-only workflow, which would otherwise not reach Copilot at
+    // all — lands there once, the skill winning the collision, exactly as on
+    // Codex. See buildAgentEntries.
     commandPath: (name) => `.github/prompts/${name}.prompt.md`,
-    skillPath: null,
+    skillPath: (name) => `.github/prompts/${name}.prompt.md`,
     renderAgent: ({ description, body }) =>
       `---\ndescription: ${description}\n---\n\n${body}`,
     renderCommand: ({ description, body }) =>
+      `---\nagent: agent\ndescription: ${description}\n---\n\n${body}`,
+    renderSkill: ({ description, body }) =>
       `---\nagent: agent\ndescription: ${description}\n---\n\n${body}`,
   },
   codex: {
@@ -231,36 +241,6 @@ const AGENT_ADAPTERS = {
   },
 };
 
-// Rules adapters cover agents that read a single native rules/instructions file
-// rather than the subagent/command/skill triad. Each renders one thin pointer
-// back to AGENTS.md + docs/ from a shared body.
-// - managed:false → the tool's primary context file the user is expected to own
-//   and extend (like CLAUDE.md). Never overwritten on update.
-// - managed:true  → a specframe-namespaced rule inside the tool's rules dir,
-//   refreshed on update (with the usual .specframe-new safety net).
-const RULES_ADAPTERS = {
-  gemini: {
-    path: 'GEMINI.md',
-    managed: false,
-    render: ({ body }) => body,
-  },
-  continue: {
-    path: '.continue/rules/specframe.md',
-    managed: true,
-    render: ({ body }) =>
-      '---\n' +
-      'name: specframe context\n' +
-      'description: Canonical AI-agent context for this repository.\n' +
-      'alwaysApply: true\n' +
-      `---\n\n${body}`,
-  },
-  amazonq: {
-    path: '.amazonq/rules/specframe.md',
-    managed: true,
-    render: ({ body }) => body,
-  },
-};
-
 // specframe ships no per-feature planning asset (spec/plan, an "explorer" or
 // "planner" subagent): every harness already has those, and duplicating them
 // is what made specframe read as a competitor to Spec Kit/BMAD/OpenSpec instead
@@ -271,6 +251,70 @@ const RULES_ADAPTERS = {
 // is both a command and a skill, on purpose, since it is one workflow — or two
 // entries that reuse one name for a different scope, can point at distinct or
 // identical body files without a naming collision on disk.
+// One command and one skill per section, rather than one that asks which
+// section you meant. The section is the decision that is hardest to get right
+// and easiest to state up front, so the command name states it: reaching for
+// `/specframe-add-rule` is already the claim that this is a rule. They share
+// one body (`specframe-add`), differing only through `vars`.
+const ADD_SECTIONS = [
+  {
+    section: 'rule',
+    label: 'rule',
+    article: 'a',
+    prefix: 'R-NNNN',
+    dir: 'docs/rules',
+    belongs: 'A constraint with no acceptable exception, and something that checks it. If a reviewer could reasonably wave a violation through, it is a guideline, not a rule.',
+    fill: '`Enforcement` names what checks it — a CI job, a linter, a permission, code review. If the honest answer is "nothing", set `Status: advisory` rather than claiming enforcement that does not exist.',
+  },
+  {
+    section: 'guideline',
+    label: 'guideline',
+    article: 'a',
+    prefix: 'GL-NNNN',
+    dir: 'docs/guidelines',
+    belongs: 'The way this repository builds something by default, which a good reason can override. If no reason could ever justify departing from it, it is a rule, not a guideline.',
+    fill: '`Rationale` says why this default and not the obvious alternative — a guideline nobody can argue with was never a choice. Give a `Prefer` and an `Avoid` example when the difference is easier shown than stated.',
+  },
+  {
+    section: 'runbook',
+    label: 'runbook',
+    article: 'a',
+    prefix: 'RB-NNNN',
+    dir: 'docs/runbook',
+    belongs: 'What to do when something breaks or has to be operated: the symptom, the steps, how you know it worked. If nothing has gone wrong, it is a guideline, not a runbook.',
+    fill: 'The steps are commands as they would actually be run here, not a description of them. `Verification` is the check that it worked, and `Rollback` is what to do when a step makes it worse — neither is optional, and "not applicable" is an answer only if it is true.',
+  },
+  {
+    section: 'glossary',
+    label: 'glossary group',
+    article: 'a',
+    prefix: 'GLO-NNNN',
+    dir: 'docs/glossary',
+    belongs: 'A domain area, and the words that mean something specific inside it. A term that belongs to an area already recorded is added to that file — only a new area needs a new one.',
+    fill: 'Each term gets one or two sentences saying what it means *here*, not in general, and naming what it is not when a neighbouring term is easy to confuse it with.',
+  },
+];
+
+const addEntries = (describe) =>
+  ADD_SECTIONS.map(({ section, label, article, prefix, dir, belongs, fill }) => ({
+    name: `specframe-add-${section}`,
+    description: describe({ section, label, dir }),
+    body: 'specframe-add',
+    vars: {
+      // The other three, so a body never offers the command it already is.
+      addOthers: ADD_SECTIONS.filter((other) => other.section !== section)
+        .map((other) => `\`/specframe-add-${other.section}\``)
+        .join(', '),
+      addSection: section,
+      addLabel: label,
+      addArticle: article,
+      addPrefix: prefix,
+      addDir: dir,
+      addBelongs: belongs,
+      addFill: fill,
+    },
+  }));
+
 const AGENT_TEMPLATES = {
   agents: [
     { name: 'bootstrapper', description: 'Populate ADR/rules/guidelines/runbook/glossary docs by analyzing an existing codebase.' },
@@ -285,6 +329,7 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
     { name: 'specframe-audit', description: 'Audit every document under docs/ against the gate its own section publishes, and report what does not belong.' },
     { name: 'specframe-do', description: 'Carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
+    ...addEntries(({ label, dir }) => `Add a ${label} to ${dir}/ — the file, its number and its index row in one step.`),
   ],
   skills: [
     { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
@@ -295,6 +340,10 @@ const AGENT_TEMPLATES = {
     // Explicit-invocation only, unlike its four siblings: the description carries
     // no auto-trigger clause on purpose. Asking for it is the opt-in.
     { name: 'specframe-do', description: 'Invoked explicitly to carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
+    ...addEntries(
+      ({ label, dir }) =>
+        `Invoked explicitly to add a ${label}: checks ${dir}/ for one that already says it, allocates the file through the CLI, and fills it in.`,
+    ),
   ],
 };
 
@@ -332,12 +381,10 @@ async function writeIfMissing(targetPath, content, targetDir, { overwrite = fals
   return { written: true, existed: alreadyThere };
 }
 
-// Root-level files init would create — AGENTS.md, CLAUDE.md, the two .github
-// templates — that are already on disk in a repo specframe has never scaffolded.
-// Most often a legacy project with its own AI-agent context file: `init` never
-// overwrites a file it did not create, so left unquestioned these would just be
-// skipped, leaving specframe's pointers unreachable from whichever file an agent
-// actually reads. Checked up front so the CLI can ask instead of skipping quietly.
+// Root-level files init would create that are already on disk in a repo
+// specframe has never scaffolded. `init` never overwrites a file it did not
+// create, so left unquestioned these would just be skipped — checked up front
+// so the CLI can ask instead of skipping quietly.
 export async function findExistingRootFiles(targetDir) {
   const found = [];
   for (const { target } of TEMPLATE_TARGETS) {
@@ -349,9 +396,14 @@ export async function findExistingRootFiles(targetDir) {
 // Every body lives flat in agents-src/bodies/, named by `entry.body` when the
 // entry declares one, or by `entry.name` otherwise — see the comment on
 // AGENT_TEMPLATES for why a name can need a body file of its own.
+// `entry.vars` lets several entries share one body that differs only in the
+// parts that are genuinely per-entry — the four `specframe-add-*` commands are
+// one skeleton and one section name. Entry vars win over the global ones, and
+// any placeholder neither supplies survives rendering, which plan.test.js
+// treats as a failure.
 async function readBody(entry, vars) {
   const bodyPath = path.join(templateDir, 'agents-src', 'bodies', `${entry.body ?? entry.name}.body.md.tpl`);
-  return renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+  return renderTemplate(await readFile(bodyPath, 'utf8'), { ...vars, ...entry.vars });
 }
 
 async function buildAgentEntries({ targets, vars }) {
@@ -369,7 +421,8 @@ async function buildAgentEntries({ targets, vars }) {
 
     // A workflow shipped as both a command and a skill (specframe-decide,
     // specframe-conform) is two files on Claude and one on Codex, whose
-    // commandPath *is* its skillPath — Codex has no project-level prompts. Two
+    // commandPath *is* its skillPath — neither Codex nor Copilot has a second
+    // slot to put it in. Two
     // plan entries for one path is not a harmless duplicate: each `update`
     // would find the other's content on disk, call it untouched-since-write,
     // and overwrite it, so the file flip-flops on every run. The skill wins,
@@ -417,29 +470,6 @@ async function buildAgentEntries({ targets, vars }) {
   return entries;
 }
 
-async function buildRulesEntries({ targets, vars }) {
-  const entries = [];
-  let body;
-
-  for (const target of targets) {
-    const adapter = RULES_ADAPTERS[target];
-    if (!adapter) continue;
-
-    if (body === undefined) {
-      const bodyPath = path.join(templateDir, 'rules-src', 'specframe-rules.body.md.tpl');
-      body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
-    }
-
-    entries.push({
-      relpath: adapter.path,
-      content: adapter.render({ body }),
-      managed: adapter.managed,
-    });
-  }
-
-  return entries;
-}
-
 // Documents produced by the decisions taken. All user-owned: they are this
 // repository's decision log from the moment they are written, so `update` never
 // touches them.
@@ -462,6 +492,16 @@ function buildDecisionEntries(resolved, { vars }) {
   for (const group of resolved.glossaryGroups) add(group.relpath, renderGlossaryGroup(group));
 
   return entries;
+}
+
+// Every section key present, each holding an array — so nothing downstream has
+// to guard for a manifest written before `doc new` existed.
+function normalizeLocalDocs(localDocs = {}) {
+  const out = {};
+  for (const section of Object.keys(LOCAL_DOC_SECTIONS)) {
+    out[section] = Array.isArray(localDocs?.[section]) ? localDocs[section] : [];
+  }
+  return out;
 }
 
 // Normalise a config that may come from a v1 manifest (contentProfile, no mode).
@@ -521,6 +561,11 @@ export function normalizeConfig(config = {}) {
     // ADRs recorded outside the catalog via `specframe adr new` — see
     // recordLocalAdr below. { number, slug, title, date }, oldest first.
     localAdrs: Array.isArray(config.localAdrs) ? config.localAdrs : [],
+    // The same, per section, for `specframe doc new` — rules, guidelines,
+    // runbooks and glossary groups this repository needed and the catalog never
+    // asked about. Absent from a manifest written before the command existed,
+    // hence the per-section default rather than a bare `?? {}`.
+    localDocs: normalizeLocalDocs(config.localDocs),
   };
 }
 
@@ -543,6 +588,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
     agentTargets,
     initDate,
     localAdrs,
+    localDocs,
   } = config;
 
   const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions, dismissed });
@@ -577,9 +623,12 @@ export async function buildTemplatePlan(rawConfig = {}) {
       ? {
           ...vars,
           index: SECTION_INDEX_RENDERERS[item.section](resolved),
-          // Only the adr README carries a second generated section — every
-          // other section index has nothing outside the catalog to list.
-          ...(item.section === 'adr' ? { localAdrIndex: renderLocalAdrIndex(localAdrs) } : {}),
+          // Every index carries a second generated section, listing what was
+          // recorded here rather than pulled from the catalog. The adr README's
+          // has its own placeholder and its own command (`adr new`).
+          ...(item.section === 'adr'
+            ? { localAdrIndex: renderLocalAdrIndex(localAdrs) }
+            : { localIndex: renderLocalDocIndex(localDocs[LOCAL_DOC_FOR_SECTION[item.section]], LOCAL_DOC_FOR_SECTION[item.section]) }),
         }
       : vars;
     plan.push({
@@ -595,7 +644,6 @@ export async function buildTemplatePlan(rawConfig = {}) {
 
   if (agentTargets.length > 0) {
     plan.push(...(await buildAgentEntries({ targets: agentTargets, vars })));
-    plan.push(...(await buildRulesEntries({ targets: agentTargets, vars })));
   }
 
   return plan;
@@ -613,8 +661,8 @@ export async function writeTemplateSet(rawConfig) {
   const previous = await readManifest(targetDir);
 
   // A file already on disk is left alone unless its relpath is in `overwrite`
-  // (the CLI asked, up front, whether to replace a pre-existing AGENTS.md/
-  // CLAUDE.md/etc.). Left alone, it is reported as `skip-user`: the manifest
+  // (the CLI asked, up front, whether to replace a pre-existing one of its root
+  // files). Left alone, it is reported as `skip-user`: the manifest
   // must not claim specframe wrote whatever is in it.
   const actions = [];
   for (const entry of plan) {
@@ -812,25 +860,28 @@ export async function decideTemplateSet(rawConfig) {
 // "Numbers are permanent. They appear in links, in commit messages, and in
 // agent output."). Removed entries stay in the manifest as tombstones for
 // exactly this, so the high-water mark is the max across both.
-async function nextLocalAdrNumber(targetDir, config) {
+// The high-water mark across disk and the manifest's own record, one step on.
+// Disk is primary — these files are the user's from the moment they are written
+// — and the manifest carries removed entries as tombstones so a number that has
+// been used is never handed out twice.
+async function nextLocalNumber(targetDir, dir, known = []) {
   let entries = [];
   try {
-    entries = await readdir(path.join(targetDir, 'docs', 'adr'));
+    entries = await readdir(path.join(targetDir, ...dir.split('/')));
   } catch {
     entries = [];
   }
 
-  const onDisk = entries
-    .map((name) => name.match(/^(\d{4,})-/))
-    .filter(Boolean)
-    .map((m) => Number(m[1]));
-
-  const known = (config?.localAdrs ?? []).map((a) => Number(a.number));
-
-  const used = [...onDisk, ...known].filter((n) => Number.isFinite(n) && n >= LOCAL_ADR_MIN);
+  const used = [
+    ...entries.map((name) => name.match(/^(\d{4,})-/)).filter(Boolean).map((m) => Number(m[1])),
+    ...known.map((item) => Number(item.number)),
+  ].filter((n) => Number.isFinite(n) && n >= LOCAL_ADR_MIN);
 
   return String(used.length === 0 ? LOCAL_ADR_MIN : Math.max(...used) + LOCAL_ADR_STEP);
 }
+
+const nextLocalAdrNumber = (targetDir, config) =>
+  nextLocalNumber(targetDir, 'docs/adr', config?.localAdrs ?? []);
 
 /**
  * Record an ADR for a decision the catalog does not ask about — the CLI half
@@ -900,6 +951,88 @@ export async function recordLocalAdr({ targetDir, version, slug, title, date, dr
   }
 
   return { number, slug, title, relpath, dryRun };
+}
+
+/**
+ * Record a rule, guideline, runbook or glossary group the catalog never asked
+ * about (`specframe doc new <section> <slug>`) — `adr new` for the other four
+ * sections, and the CLI primitive the doc-sync skill delegates to instead of
+ * writing a file by hand.
+ *
+ * Same contract: the number comes from the band the catalog promises never to
+ * use, the file is written with empty sections for the caller to fill and is
+ * theirs from that moment, and only the section README's `## Added here` index
+ * stays specframe's to keep current.
+ */
+export async function recordLocalDoc({ targetDir, version, section, slug, title, date, dryRun = false, quiet = false }) {
+  const meta = LOCAL_DOC_SECTIONS[section];
+  if (!meta) {
+    throw new Error(
+      `Unknown section \`${section}\`.\n\n` + `One of: ${Object.keys(LOCAL_DOC_SECTIONS).join(', ')}.`,
+    );
+  }
+
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${MANIFEST_RELPATH} in ${targetDir}.\n` +
+        'Run `specframe init` first — `doc new` extends an existing scaffold.',
+    );
+  }
+
+  const config = normalizeConfig(manifest.config);
+  const number = await nextLocalNumber(targetDir, meta.dir, config.localDocs[section]);
+  const relpath = `${meta.dir}/${number}-${slug}.md`;
+  const absPath = toAbsPath(targetDir, relpath);
+
+  // Only reachable on a genuine race between two `doc new` calls — see the
+  // identical guard in recordLocalAdr.
+  if (await exists(absPath)) {
+    throw new Error(`${relpath} already exists.`);
+  }
+
+  const localDocs = {
+    ...config.localDocs,
+    [section]: [...config.localDocs[section], { number, slug, title, date }],
+  };
+  const nextConfig = { ...config, localDocs };
+
+  if (!dryRun) {
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, renderLocalDoc({ section, number, title, date }), 'utf8');
+  }
+
+  // Refresh that section's README the same way recordLocalAdr refreshes the ADR
+  // one: the generated sections in place, the prose around them kept.
+  const readmeRelpath = `${meta.dir}/README.md`;
+  const plan = await buildTemplatePlan(nextConfig);
+  const readmeEntry = plan.find((entry) => entry.relpath === readmeRelpath);
+  const diskContents = await readDiskFiles(targetDir, [readmeEntry]);
+  const readmeActions = planUpdateActions({
+    plan: [{ ...readmeEntry, managed: true }],
+    manifest,
+    diskContents,
+    force: false,
+  });
+
+  await applyActions({ targetDir, actions: readmeActions, dryRun, quiet });
+
+  if (!dryRun) {
+    const readmeManifest = manifestFromActions({
+      plan: [{ ...readmeEntry, managed: true }],
+      actions: readmeActions,
+      previous: manifest,
+      version,
+      config: nextConfig,
+    });
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...manifest.config, localDocs },
+      files: { ...manifest.files, ...readmeManifest.files },
+    });
+  }
+
+  return { section, number, slug, title, relpath, dryRun };
 }
 
 /**
@@ -1130,7 +1263,7 @@ async function pruneEmptyDirs(startDir, rootDir) {
  * Deliberately narrower than `update`: the only files in scope are the ones the
  * newly added targets contribute (`.claude/**`, `GEMINI.md`, …), computed as the
  * difference between the plan for the merged target list and the plan for the
- * one already recorded. Everything else — docs, ADRs, AGENTS.md — is left
+ * one already recorded. Everything else — docs, ADRs — is left
  * exactly as it stands, so adding a second harness can never rewrite prose
  * written for the first.
  *
@@ -1178,13 +1311,12 @@ export async function addAgentTargets(rawConfig) {
  *
  * The mirror of addAgentTargets, and narrow in the same way: the files in scope
  * are exactly the ones the dropped targets contributed, computed as the
- * difference between the plan before and the plan after. AGENTS.md and docs/
- * are untouched, so the repository keeps its whole decision log — it just stops
+ * difference between the plan before and the plan after. docs/ is untouched, so the repository keeps its whole decision log — it just stops
  * shipping that tool's native files. Removing the last one is a supported
- * position: AGENTS.md alone covers most tools.
+ * position: docs/ is the log and reads the same without a harness.
  *
  * @param {string[]} previousTargets  the targets recorded in the manifest.
- * @param {boolean} purge  also remove the harness's user-owned file (GEMINI.md).
+ * @param {boolean} purge  also remove a file the manifest records as the user's.
  * @param {boolean} force  also remove a managed file that was edited by hand.
  */
 export async function removeAgentTargets(rawConfig) {

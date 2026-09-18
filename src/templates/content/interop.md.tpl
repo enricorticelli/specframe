@@ -43,7 +43,7 @@ instructions agree on what is whose:
   and record it with `specframe decide` (or, for a decision the catalog never
   asked about, `specframe adr new`) before building on it. An architectural
   choice made silently inside a spec is exactly the failure this repository is
-  structured to prevent — see `AGENTS.md`.
+  structured to prevent — see `docs/adr/README.md`.
 - When the change is archived and the spec or plan file is gone, the decision
   it depended on should not be. If it only exists in the now-archived spec,
   it was never really recorded.
@@ -57,7 +57,7 @@ two copies of the same rule drift, and the one nobody reads first is the one
 that goes stale. A short pointer is enough:
 
 > Non-negotiable constraints and architectural decisions for this repository
-> are recorded in `docs/rules/` and `docs/adr/` (see `AGENTS.md`). Read them
+> are recorded in `docs/rules/` and `docs/adr/`. Read them
 > before proposing a spec or a plan.
 
 specframe does not write that pointer for you: the file is the other tool's,

@@ -32,3 +32,10 @@ Start from [`0000-template.md`](./0000-template.md).
 ## Index
 
 {{index}}
+
+## Added here
+
+Procedures this repository needed that the catalog never asked about — recorded
+with `specframe doc new runbook <slug>`.
+
+{{localIndex}}

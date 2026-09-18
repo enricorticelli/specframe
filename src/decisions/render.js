@@ -459,3 +459,118 @@ export function renderLocalAdrIndex(localAdrs = []) {
 
   return ['| ADR | Title |', '| --- | --- |', ...rows].join('\n');
 }
+
+// --- documents recorded outside the catalog ----------------------------------
+// `specframe doc new <section> <slug>` is `adr new` for the other four sections:
+// a rule, guideline, runbook or glossary group this repository needs and the
+// catalog never asked about. Same deal as renderLocalAdr — the file is the
+// caller's from the first write, and only the index row stays specframe's.
+//
+// Each skeleton mirrors that section's own 0000-template.md: same identifier
+// prefix, same headings, in the same order. A document written by this command
+// and one written by hand from the template are the same document.
+export const LOCAL_DOC_SECTIONS = {
+  rule: { dir: 'docs/rules', prefix: 'R', label: 'rule', command: 'rule' },
+  guideline: { dir: 'docs/guidelines', prefix: 'GL', label: 'guideline', command: 'guideline' },
+  runbook: { dir: 'docs/runbook', prefix: 'RB', label: 'runbook', command: 'runbook' },
+  glossary: { dir: 'docs/glossary', prefix: 'GLO', label: 'glossary group', command: 'glossary' },
+};
+
+const LOCAL_DOC_BODIES = {
+  rule: [
+    '- Status: enforced',
+    '- Source: — <!-- ADR-NNNN, when this rule follows from a recorded decision -->',
+    '',
+    '## Rule',
+    '',
+    '<!-- One imperative sentence: never, always, must. If it needs "should", it is a guideline. -->',
+    '',
+    '## Why',
+    '',
+    '<!-- What actually goes wrong, and why ordinary means do not recover it. -->',
+    '',
+    '## Enforcement',
+    '',
+    '<!-- What checks this, by name. If the answer is "nothing", the status is `advisory`. -->',
+  ],
+  guideline: [
+    '- Status: active',
+    '- Source: — <!-- ADR-NNNN, when this follows from a recorded decision -->',
+    '',
+    '## Scope',
+    '',
+    '<!-- Where this applies, and where it does not. -->',
+    '',
+    '## Guideline',
+    '',
+    '<!-- What to do by default, and what a good reason to depart looks like. -->',
+    '',
+    '## Rationale',
+    '',
+    '<!-- Why this default and not the obvious alternative. -->',
+    '',
+    '## Examples',
+    '',
+    'Prefer:',
+    '',
+    '```',
+    '```',
+    '',
+    'Avoid:',
+    '',
+    '```',
+    '```',
+  ],
+  runbook: [
+    '- Source: — <!-- ADR-NNNN, when this procedure exists because of a decision -->',
+    '',
+    '## When to use',
+    '',
+    '<!-- The symptom, as it is actually observed. -->',
+    '',
+    '## Prerequisites',
+    '',
+    '- ',
+    '',
+    '## Steps',
+    '',
+    '1. ',
+    '',
+    '## Verification',
+    '',
+    '<!-- How you know it worked — the check, not the hope. -->',
+    '',
+    '## Rollback',
+    '',
+    '<!-- What to do when a step makes it worse. -->',
+  ],
+  glossary: [
+    '- Status: active',
+    '',
+    '## Term',
+    '',
+    '<!-- One or two sentences. What it means here, not in general. -->',
+  ],
+};
+
+export function renderLocalDoc({ section, number, title, date }) {
+  const { prefix } = LOCAL_DOC_SECTIONS[section];
+  const head = [`# ${prefix}-${number}: ${title}`, ''];
+  // Only the runbook template carries no Status line, so the date goes after
+  // whatever front matter that section actually has.
+  return [...head, ...LOCAL_DOC_BODIES[section], '', `<!-- Added ${date}. -->`, ''].join('\n');
+}
+
+export function renderLocalDocIndex(items = [], section) {
+  const live = items.filter((item) => item.removed === undefined);
+  const { prefix, command } = LOCAL_DOC_SECTIONS[section];
+  if (live.length === 0) {
+    return `<!-- None recorded yet. Run \`specframe doc new ${command} <slug> --title "..."\`. -->`;
+  }
+
+  const rows = [...live]
+    .sort((a, b) => a.number.localeCompare(b.number))
+    .map((item) => `| [${prefix}-${item.number}](./${item.number}-${item.slug}.md) | ${item.title} |`);
+
+  return [`| ID | Title |`, '| --- | --- |', ...rows].join('\n');
+}
