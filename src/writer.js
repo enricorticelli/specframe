@@ -17,6 +17,9 @@ import {
   renderGuidelinesIndex,
   renderLocalAdr,
   renderLocalAdrIndex,
+  renderLocalDoc,
+  renderLocalDocIndex,
+  LOCAL_DOC_SECTIONS,
   renderOpenDecisions,
   renderRule,
   renderRulesIndex,
@@ -123,7 +126,11 @@ const TEMPLATE_TARGETS = [
 // names the headings of the part specframe renders in each: everything else in
 // them is prose the user is invited to rewrite, and a refresh has to be able to
 // land without touching it.
-const INDEX_SECTION = ['## Index'];
+// Two generated sections in every section index now: the catalog's documents,
+// and the ones `specframe doc new` recorded here. `## Added here` is new to
+// repositories scaffolded before that command existed — mergeGeneratedSections
+// inserts it after `## Index`, which is why the order below is document order.
+const INDEX_SECTION = ['## Index', '## Added here'];
 // `## When to write one` is the canonical long form of the ADR gate, and it is
 // listed here because it has to reach repos scaffolded before the gate was
 // tightened. It needs no anchor — every adr/README.md ever written already has it — but the
@@ -160,6 +167,16 @@ const CONTENT_TARGETS = [
   { template: 'glossary-0000-template.md.tpl', target: 'docs/glossary/0000-template.md' },
   { template: 'glossary-0001-example.md.tpl', target: 'docs/glossary/0001-example.md', blankOnly: true },
 ];
+
+// The section key CONTENT_TARGETS uses, mapped to the `doc new` section name.
+// They differ in exactly one place — the runbook directory is singular and its
+// index renderer is plural — and one map is cheaper than renaming either.
+const LOCAL_DOC_FOR_SECTION = {
+  rules: 'rule',
+  guidelines: 'guideline',
+  runbooks: 'runbook',
+  glossary: 'glossary',
+};
 
 const SECTION_INDEX_RENDERERS = {
   adr: renderAdrIndex,
@@ -248,6 +265,7 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
     { name: 'specframe-audit', description: 'Audit every document under docs/ against the gate its own section publishes, and report what does not belong.' },
     { name: 'specframe-do', description: 'Carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
+    { name: 'specframe-doc', description: 'Add a rule, guideline, runbook or glossary group to the log — the file, its number and its index row in one step.', body: 'specframe-doc' },
   ],
   skills: [
     { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
@@ -258,6 +276,7 @@ const AGENT_TEMPLATES = {
     // Explicit-invocation only, unlike its four siblings: the description carries
     // no auto-trigger clause on purpose. Asking for it is the opt-in.
     { name: 'specframe-do', description: 'Invoked explicitly to carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
+    { name: 'specframe-doc', description: 'Invoked explicitly to add a rule, guideline, runbook or glossary group: picks the section, allocates the file through the CLI, and fills it in.', body: 'specframe-doc' },
   ],
 };
 
@@ -403,6 +422,16 @@ function buildDecisionEntries(resolved, { vars }) {
   return entries;
 }
 
+// Every section key present, each holding an array — so nothing downstream has
+// to guard for a manifest written before `doc new` existed.
+function normalizeLocalDocs(localDocs = {}) {
+  const out = {};
+  for (const section of Object.keys(LOCAL_DOC_SECTIONS)) {
+    out[section] = Array.isArray(localDocs?.[section]) ? localDocs[section] : [];
+  }
+  return out;
+}
+
 // Normalise a config that may come from a v1 manifest (contentProfile, no mode).
 export function normalizeConfig(config = {}) {
   const mode = config.mode === 'guided' ? 'guided' : 'blank';
@@ -460,6 +489,11 @@ export function normalizeConfig(config = {}) {
     // ADRs recorded outside the catalog via `specframe adr new` — see
     // recordLocalAdr below. { number, slug, title, date }, oldest first.
     localAdrs: Array.isArray(config.localAdrs) ? config.localAdrs : [],
+    // The same, per section, for `specframe doc new` — rules, guidelines,
+    // runbooks and glossary groups this repository needed and the catalog never
+    // asked about. Absent from a manifest written before the command existed,
+    // hence the per-section default rather than a bare `?? {}`.
+    localDocs: normalizeLocalDocs(config.localDocs),
   };
 }
 
@@ -482,6 +516,7 @@ export async function buildTemplatePlan(rawConfig = {}) {
     agentTargets,
     initDate,
     localAdrs,
+    localDocs,
   } = config;
 
   const resolved = resolveDecisions({ mode, answers: decisions, provenance, revisions, dismissed });
@@ -516,9 +551,12 @@ export async function buildTemplatePlan(rawConfig = {}) {
       ? {
           ...vars,
           index: SECTION_INDEX_RENDERERS[item.section](resolved),
-          // Only the adr README carries a second generated section — every
-          // other section index has nothing outside the catalog to list.
-          ...(item.section === 'adr' ? { localAdrIndex: renderLocalAdrIndex(localAdrs) } : {}),
+          // Every index carries a second generated section, listing what was
+          // recorded here rather than pulled from the catalog. The adr README's
+          // has its own placeholder and its own command (`adr new`).
+          ...(item.section === 'adr'
+            ? { localAdrIndex: renderLocalAdrIndex(localAdrs) }
+            : { localIndex: renderLocalDocIndex(localDocs[LOCAL_DOC_FOR_SECTION[item.section]], LOCAL_DOC_FOR_SECTION[item.section]) }),
         }
       : vars;
     plan.push({
@@ -750,25 +788,28 @@ export async function decideTemplateSet(rawConfig) {
 // "Numbers are permanent. They appear in links, in commit messages, and in
 // agent output."). Removed entries stay in the manifest as tombstones for
 // exactly this, so the high-water mark is the max across both.
-async function nextLocalAdrNumber(targetDir, config) {
+// The high-water mark across disk and the manifest's own record, one step on.
+// Disk is primary — these files are the user's from the moment they are written
+// — and the manifest carries removed entries as tombstones so a number that has
+// been used is never handed out twice.
+async function nextLocalNumber(targetDir, dir, known = []) {
   let entries = [];
   try {
-    entries = await readdir(path.join(targetDir, 'docs', 'adr'));
+    entries = await readdir(path.join(targetDir, ...dir.split('/')));
   } catch {
     entries = [];
   }
 
-  const onDisk = entries
-    .map((name) => name.match(/^(\d{4,})-/))
-    .filter(Boolean)
-    .map((m) => Number(m[1]));
-
-  const known = (config?.localAdrs ?? []).map((a) => Number(a.number));
-
-  const used = [...onDisk, ...known].filter((n) => Number.isFinite(n) && n >= LOCAL_ADR_MIN);
+  const used = [
+    ...entries.map((name) => name.match(/^(\d{4,})-/)).filter(Boolean).map((m) => Number(m[1])),
+    ...known.map((item) => Number(item.number)),
+  ].filter((n) => Number.isFinite(n) && n >= LOCAL_ADR_MIN);
 
   return String(used.length === 0 ? LOCAL_ADR_MIN : Math.max(...used) + LOCAL_ADR_STEP);
 }
+
+const nextLocalAdrNumber = (targetDir, config) =>
+  nextLocalNumber(targetDir, 'docs/adr', config?.localAdrs ?? []);
 
 /**
  * Record an ADR for a decision the catalog does not ask about — the CLI half
@@ -838,6 +879,88 @@ export async function recordLocalAdr({ targetDir, version, slug, title, date, dr
   }
 
   return { number, slug, title, relpath, dryRun };
+}
+
+/**
+ * Record a rule, guideline, runbook or glossary group the catalog never asked
+ * about (`specframe doc new <section> <slug>`) — `adr new` for the other four
+ * sections, and the CLI primitive the doc-sync skill delegates to instead of
+ * writing a file by hand.
+ *
+ * Same contract: the number comes from the band the catalog promises never to
+ * use, the file is written with empty sections for the caller to fill and is
+ * theirs from that moment, and only the section README's `## Added here` index
+ * stays specframe's to keep current.
+ */
+export async function recordLocalDoc({ targetDir, version, section, slug, title, date, dryRun = false, quiet = false }) {
+  const meta = LOCAL_DOC_SECTIONS[section];
+  if (!meta) {
+    throw new Error(
+      `Unknown section \`${section}\`.\n\n` + `One of: ${Object.keys(LOCAL_DOC_SECTIONS).join(', ')}.`,
+    );
+  }
+
+  const manifest = await readManifest(targetDir);
+  if (!manifest?.config) {
+    throw new Error(
+      `No ${MANIFEST_RELPATH} in ${targetDir}.\n` +
+        'Run `specframe init` first — `doc new` extends an existing scaffold.',
+    );
+  }
+
+  const config = normalizeConfig(manifest.config);
+  const number = await nextLocalNumber(targetDir, meta.dir, config.localDocs[section]);
+  const relpath = `${meta.dir}/${number}-${slug}.md`;
+  const absPath = toAbsPath(targetDir, relpath);
+
+  // Only reachable on a genuine race between two `doc new` calls — see the
+  // identical guard in recordLocalAdr.
+  if (await exists(absPath)) {
+    throw new Error(`${relpath} already exists.`);
+  }
+
+  const localDocs = {
+    ...config.localDocs,
+    [section]: [...config.localDocs[section], { number, slug, title, date }],
+  };
+  const nextConfig = { ...config, localDocs };
+
+  if (!dryRun) {
+    await mkdir(path.dirname(absPath), { recursive: true });
+    await writeFile(absPath, renderLocalDoc({ section, number, title, date }), 'utf8');
+  }
+
+  // Refresh that section's README the same way recordLocalAdr refreshes the ADR
+  // one: the generated sections in place, the prose around them kept.
+  const readmeRelpath = `${meta.dir}/README.md`;
+  const plan = await buildTemplatePlan(nextConfig);
+  const readmeEntry = plan.find((entry) => entry.relpath === readmeRelpath);
+  const diskContents = await readDiskFiles(targetDir, [readmeEntry]);
+  const readmeActions = planUpdateActions({
+    plan: [{ ...readmeEntry, managed: true }],
+    manifest,
+    diskContents,
+    force: false,
+  });
+
+  await applyActions({ targetDir, actions: readmeActions, dryRun, quiet });
+
+  if (!dryRun) {
+    const readmeManifest = manifestFromActions({
+      plan: [{ ...readmeEntry, managed: true }],
+      actions: readmeActions,
+      previous: manifest,
+      version,
+      config: nextConfig,
+    });
+    await writeManifest(targetDir, {
+      ...manifest,
+      config: { ...manifest.config, localDocs },
+      files: { ...manifest.files, ...readmeManifest.files },
+    });
+  }
+
+  return { section, number, slug, title, relpath, dryRun };
 }
 
 /**

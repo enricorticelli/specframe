@@ -50,6 +50,7 @@ test('init writes a manifest capturing version and config', async () => {
       revisions: {},
       dismissed: {},
       localAdrs: [],
+      localDocs: { rule: [], guideline: [], runbook: [], glossary: [] },
     });
     assert.ok(manifest.files[MANAGED_AGENT].managed, 'bootstrapper is managed');
     assert.equal(manifest.files[USER_OWNED].managed, false, 'docs/README.md is user-owned');

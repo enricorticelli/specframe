@@ -311,6 +311,17 @@ specframe adr new payments-provider --title "Payment provider" --dry-run --json
 
 Writes `docs/adr/9000-payments-provider.md` — empty Context/Decision/Consequences/Alternatives sections for you or an agent to fill in — and lists it under docs/adr/README.md's **Decisions outside the catalog** section. The number comes from a band (`9000` up, in tens) the catalog promises never to allocate, derived from disk rather than the manifest, so it can never collide with a decision a future version adds. `specframe-record` is the agent-driven version.
 
+The other four sections work the same way:
+
+```bash
+specframe doc new rule no-raw-sql --title "No raw SQL outside the repository layer"
+specframe doc new guideline error-shape --title "Errors carry a code"
+specframe doc new runbook restore-db --title "Restore the database"
+specframe doc new glossary billing --title "Billing"
+```
+
+Each writes the file from that section's own template — same identifier prefix, same headings — and adds its row under the README's **Added here** index. Same band, numbered per section. Doing it by hand means three steps (the file, the number, the index row) and forgetting one leaves the log inconsistent; `/specframe-doc` is the agent-driven version, and `specframe-doc-sync` the one that notices the gap on its own.
+
 ---
 
 ## Updating

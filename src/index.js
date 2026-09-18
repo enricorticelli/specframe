@@ -3,6 +3,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { LOCAL_DOC_SECTIONS } from './decisions/render.js';
 import {
   applyRecommendedDefaults,
   collectAnswerSources,
@@ -39,6 +40,7 @@ import {
   planRevisionEffects,
   previewUninstallKept,
   recordLocalAdr,
+  recordLocalDoc,
   removeLocalAdr,
   removeAgentTargets,
   reviseTemplateSet,
@@ -123,10 +125,12 @@ export function parseArgs(argv) {
 
     // A second bare argument is the command's subject — `revise <decision-id>`,
     // `explain <decision-id>`, or `adr <subcommand>`. A third is `adr new
-    // <slug>`'s slug. Kept as first-one-wins per slot, so a stray extra
-    // argument cannot quietly redirect the command.
+    // <slug>`'s slug, and a fourth `doc new <section> <slug>`'s. Kept as
+    // first-one-wins per slot, so a stray extra argument cannot quietly
+    // redirect the command.
     if (flags.target === undefined) { flags.target = arg; continue; }
-    if (flags.target2 === undefined) flags.target2 = arg;
+    if (flags.target2 === undefined) { flags.target2 = arg; continue; }
+    if (flags.target3 === undefined) flags.target3 = arg;
   }
 
   return { command, flags, commandSeen };
@@ -162,6 +166,12 @@ Usage:
   specframe adr rm <number>      Withdraw one of those: an ADR that should not
                                   have been written. Removes the file and its
                                   index row; the number is never reissued.
+  specframe doc new <section> <slug>
+                                 The same for the other four sections: a rule,
+                                  guideline, runbook or glossary group this
+                                  repository needs that the catalog never asked
+                                  about. Writes the file from that section's
+                                  template and adds its index row.
   specframe revise [id]          Change a decision already recorded.
   specframe dismiss <id>         Declare a decision can never apply here — every
                                   frontend decision in a backend-only service,
@@ -1004,6 +1014,58 @@ async function runAdrNew(cwd, version, flags) {
       flags.dryRun
         ? '\nDry run complete. Nothing was written.'
         : '\nFill in Context, Decision, Consequences and Alternatives, then set its Status.',
+    ),
+  );
+}
+
+// Record a rule, guideline, runbook or glossary group the catalog does not ask
+// about — `adr new` for the other four sections, and the CLI half of the
+// `specframe-doc` command. See writer.js's recordLocalDoc.
+async function runDocNew(cwd, version, flags) {
+  const sections = Object.keys(LOCAL_DOC_SECTIONS);
+  const usage =
+    `Usage: specframe doc new <section> <slug> --title "..."\n\n` + `<section> is one of: ${sections.join(', ')}.`;
+
+  if (flags.target !== 'new') {
+    throw new Error(`Unknown \`doc\` subcommand: ${flags.target ?? '(none)'}\n\n${usage}`);
+  }
+  const section = flags.target2;
+  if (!sections.includes(section)) {
+    throw new Error(`${usage}\n\nGot: ${section ?? '(none)'}`);
+  }
+  const slug = flags.target3;
+  if (!slug || !/^[a-z0-9-]+$/.test(slug)) {
+    throw new Error(`${usage}\n\n<slug> must be lowercase, digits and hyphens.`);
+  }
+  if (!flags.title) {
+    throw new Error(`${usage}\n\n--title is required.`);
+  }
+
+  const targetDir = await resolveTargetDir(cwd);
+  const result = await recordLocalDoc({
+    targetDir,
+    version,
+    section,
+    slug,
+    title: flags.title,
+    date: today(),
+    dryRun: flags.dryRun,
+    quiet: flags.json,
+  });
+
+  if (flags.json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  const { prefix, label } = LOCAL_DOC_SECTIONS[section];
+  console.log(`${theme.good('[write]')} ${result.relpath}`);
+  console.log(theme.muted(`${prefix}-${result.number}: ${result.title}`));
+  console.log(
+    theme.muted(
+      flags.dryRun
+        ? '\nDry run complete. Nothing was written.'
+        : `\nFill in the ${label}'s sections — the headings are the ones its template asks for.`,
     ),
   );
 }
@@ -1859,6 +1921,11 @@ export async function run(argv = process.argv.slice(2)) {
       return;
     }
     await runAdrNew(cwd, version, flags);
+    return;
+  }
+
+  if (command === 'doc') {
+    await runDocNew(cwd, version, flags);
     return;
   }
 

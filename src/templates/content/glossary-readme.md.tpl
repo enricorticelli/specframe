@@ -34,3 +34,10 @@ Use this README as the index only. Start from
 ## Index
 
 {{index}}
+
+## Added here
+
+Domain areas this repository needed that the catalog never asked about —
+recorded with `specframe doc new glossary <slug>`.
+
+{{localIndex}}
