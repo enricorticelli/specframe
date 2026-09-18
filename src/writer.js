@@ -251,6 +251,70 @@ const AGENT_ADAPTERS = {
 // is both a command and a skill, on purpose, since it is one workflow — or two
 // entries that reuse one name for a different scope, can point at distinct or
 // identical body files without a naming collision on disk.
+// One command and one skill per section, rather than one that asks which
+// section you meant. The section is the decision that is hardest to get right
+// and easiest to state up front, so the command name states it: reaching for
+// `/specframe-add-rule` is already the claim that this is a rule. They share
+// one body (`specframe-add`), differing only through `vars`.
+const ADD_SECTIONS = [
+  {
+    section: 'rule',
+    label: 'rule',
+    article: 'a',
+    prefix: 'R-NNNN',
+    dir: 'docs/rules',
+    belongs: 'A constraint with no acceptable exception, and something that checks it. If a reviewer could reasonably wave a violation through, it is a guideline, not a rule.',
+    fill: '`Enforcement` names what checks it — a CI job, a linter, a permission, code review. If the honest answer is "nothing", set `Status: advisory` rather than claiming enforcement that does not exist.',
+  },
+  {
+    section: 'guideline',
+    label: 'guideline',
+    article: 'a',
+    prefix: 'GL-NNNN',
+    dir: 'docs/guidelines',
+    belongs: 'The way this repository builds something by default, which a good reason can override. If no reason could ever justify departing from it, it is a rule, not a guideline.',
+    fill: '`Rationale` says why this default and not the obvious alternative — a guideline nobody can argue with was never a choice. Give a `Prefer` and an `Avoid` example when the difference is easier shown than stated.',
+  },
+  {
+    section: 'runbook',
+    label: 'runbook',
+    article: 'a',
+    prefix: 'RB-NNNN',
+    dir: 'docs/runbook',
+    belongs: 'What to do when something breaks or has to be operated: the symptom, the steps, how you know it worked. If nothing has gone wrong, it is a guideline, not a runbook.',
+    fill: 'The steps are commands as they would actually be run here, not a description of them. `Verification` is the check that it worked, and `Rollback` is what to do when a step makes it worse — neither is optional, and "not applicable" is an answer only if it is true.',
+  },
+  {
+    section: 'glossary',
+    label: 'glossary group',
+    article: 'a',
+    prefix: 'GLO-NNNN',
+    dir: 'docs/glossary',
+    belongs: 'A domain area, and the words that mean something specific inside it. A term that belongs to an area already recorded is added to that file — only a new area needs a new one.',
+    fill: 'Each term gets one or two sentences saying what it means *here*, not in general, and naming what it is not when a neighbouring term is easy to confuse it with.',
+  },
+];
+
+const addEntries = (describe) =>
+  ADD_SECTIONS.map(({ section, label, article, prefix, dir, belongs, fill }) => ({
+    name: `specframe-add-${section}`,
+    description: describe({ section, label, dir }),
+    body: 'specframe-add',
+    vars: {
+      // The other three, so a body never offers the command it already is.
+      addOthers: ADD_SECTIONS.filter((other) => other.section !== section)
+        .map((other) => `\`/specframe-add-${other.section}\``)
+        .join(', '),
+      addSection: section,
+      addLabel: label,
+      addArticle: article,
+      addPrefix: prefix,
+      addDir: dir,
+      addBelongs: belongs,
+      addFill: fill,
+    },
+  }));
+
 const AGENT_TEMPLATES = {
   agents: [
     { name: 'bootstrapper', description: 'Populate ADR/rules/guidelines/runbook/glossary docs by analyzing an existing codebase.' },
@@ -265,7 +329,7 @@ const AGENT_TEMPLATES = {
     { name: 'specframe-bootstrap', description: 'Populate ADR/rules/guidelines/runbook/glossary from an existing codebase.' },
     { name: 'specframe-audit', description: 'Audit every document under docs/ against the gate its own section publishes, and report what does not belong.' },
     { name: 'specframe-do', description: 'Carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
-    { name: 'specframe-doc', description: 'Add a rule, guideline, runbook or glossary group to the log — the file, its number and its index row in one step.', body: 'specframe-doc' },
+    ...addEntries(({ label, dir }) => `Add a ${label} to ${dir}/ — the file, its number and its index row in one step.`),
   ],
   skills: [
     { name: 'specframe-decide', description: 'Auto-trigger when an architectural decision needs to be made, or a spec/plan from another tool implies one not yet recorded.', body: 'specframe-decide' },
@@ -276,7 +340,10 @@ const AGENT_TEMPLATES = {
     // Explicit-invocation only, unlike its four siblings: the description carries
     // no auto-trigger clause on purpose. Asking for it is the opt-in.
     { name: 'specframe-do', description: 'Invoked explicitly to carry out an implementation task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open.', body: 'specframe-do' },
-    { name: 'specframe-doc', description: 'Invoked explicitly to add a rule, guideline, runbook or glossary group: picks the section, allocates the file through the CLI, and fills it in.', body: 'specframe-doc' },
+    ...addEntries(
+      ({ label, dir }) =>
+        `Invoked explicitly to add a ${label}: checks ${dir}/ for one that already says it, allocates the file through the CLI, and fills it in.`,
+    ),
   ],
 };
 
@@ -329,9 +396,14 @@ export async function findExistingRootFiles(targetDir) {
 // Every body lives flat in agents-src/bodies/, named by `entry.body` when the
 // entry declares one, or by `entry.name` otherwise — see the comment on
 // AGENT_TEMPLATES for why a name can need a body file of its own.
+// `entry.vars` lets several entries share one body that differs only in the
+// parts that are genuinely per-entry — the four `specframe-add-*` commands are
+// one skeleton and one section name. Entry vars win over the global ones, and
+// any placeholder neither supplies survives rendering, which plan.test.js
+// treats as a failure.
 async function readBody(entry, vars) {
   const bodyPath = path.join(templateDir, 'agents-src', 'bodies', `${entry.body ?? entry.name}.body.md.tpl`);
-  return renderTemplate(await readFile(bodyPath, 'utf8'), vars);
+  return renderTemplate(await readFile(bodyPath, 'utf8'), { ...vars, ...entry.vars });
 }
 
 async function buildAgentEntries({ targets, vars }) {

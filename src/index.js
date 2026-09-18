@@ -1020,7 +1020,7 @@ async function runAdrNew(cwd, version, flags) {
 
 // Record a rule, guideline, runbook or glossary group the catalog does not ask
 // about — `adr new` for the other four sections, and the CLI half of the
-// `specframe-doc` command. See writer.js's recordLocalDoc.
+// `specframe-add-*` commands. See writer.js's recordLocalDoc.
 async function runDocNew(cwd, version, flags) {
   const sections = Object.keys(LOCAL_DOC_SECTIONS);
   const usage =

@@ -182,10 +182,11 @@ Pick agent assistants and specframe drops subagents, slash commands and skills i
 Only these three: a harness with no slot for a command or a skill has nothing to be given, because there is no context file to hand it either. It reads `docs/` the way a person does.
 
 - **Subagents:** `bootstrapper` (reconstructs the log from an existing codebase), `doc-writer` (renders a decided entry to disk), `conformance` (reviews diffs against ADRs, rules and guidelines).
-- **Commands:** `/specframe-decide` registers a decision, catalog or project-specific, with an agent in the loop — it reads `specframe review`/`explain` for the state and the tradeoffs, looks for evidence in the repo, then writes through the CLI · `/specframe-conform` reviews current changes · `/specframe-do` carries out a task under the enforced rules and recorded ADRs, stopping if it depends on a decision still open · `/specframe-bootstrap` populates the log from shipped code.
+- **Commands:** `/specframe-decide` registers a decision, catalog or project-specific, with an agent in the loop — it reads `specframe review`/`explain` for the state and the tradeoffs, looks for evidence in the repo, then writes through the CLI · `/specframe-conform` reviews current changes · `/specframe-bootstrap` populates the log from shipped code.
 - **Skills** (auto-triggered): `specframe-decide` turns a conversation into a recorded catalog decision · `specframe-record` does the same for one the catalog never asked about · `specframe-conform` enforces your rules on every diff · `specframe-doc-sync` flags a convention or term appearing in code with no matching doc.
+- **Explicit only**, never auto-triggered — asking for one *is* the opt-in: `/specframe-do` carries out a task inside the fence your rules and ADRs already define, stopping if it depends on a decision still open · `/specframe-add-rule`, `/specframe-add-guideline`, `/specframe-add-runbook` and `/specframe-add-glossary` each add one document to its own section. One per section on purpose: reaching for `add-rule` is already the claim that this is a rule, and the skill says so when it is not.
 
-`specframe-decide` is one definition shipped as both a command and a skill: invoke it, or let it trigger itself the moment a decision needs making. `specframe-do` is the one that is never auto-triggered — asking for it is how you opt into working inside the fence. All of it is **decision-shaped** on purpose — no `prd/`, no `specs/`, no per-feature `spec.md`/`plan.md`/`tasks.md`.
+`specframe-decide` is one definition shipped as both a command and a skill: invoke it, or let it trigger itself the moment a decision needs making. All of it is **decision-shaped** on purpose — no `prd/`, no `specs/`, no per-feature `spec.md`/`plan.md`/`tasks.md`.
 
 ### Changing assistants later
 
@@ -320,7 +321,7 @@ specframe doc new runbook restore-db --title "Restore the database"
 specframe doc new glossary billing --title "Billing"
 ```
 
-Each writes the file from that section's own template — same identifier prefix, same headings — and adds its row under the README's **Added here** index. Same band, numbered per section. Doing it by hand means three steps (the file, the number, the index row) and forgetting one leaves the log inconsistent; `/specframe-doc` is the agent-driven version, and `specframe-doc-sync` the one that notices the gap on its own.
+Each writes the file from that section's own template — same identifier prefix, same headings — and adds its row under the README's **Added here** index. Same band, numbered per section. Doing it by hand means three steps (the file, the number, the index row) and forgetting one leaves the log inconsistent; `/specframe-add-<section>` is the agent-driven version, and `specframe-doc-sync` the one that notices the gap on its own.
 
 ---
 
