@@ -368,6 +368,13 @@ test('dropping a harness removes what specframe wrote and keeps what it did not'
   assert.equal(actionFor(actions, 'managed-untouched.md').action, 'orphan-remove');
   assert.equal(actionFor(actions, 'managed-edited.md').action, 'orphan');
   assert.equal(actionFor(actions, 'mine.md').action, 'skip-user');
+
+  // No harness contributes a user-owned file any more, but a repository
+  // scaffolded before specframe stopped writing per-tool context files still
+  // has one tracked, and --purge is the only thing that may remove it.
+  const purged = planAgentRemoval({ relpaths: ['mine.md'], manifest, diskHashes, purge: true });
+  assert.equal(actionFor(purged, 'mine.md').action, 'orphan-remove');
+  assert.equal(actionFor(purged, 'mine.md').forced, true);
   assert.equal(
     actions.find((a) => a.relpath === 'gone.md'),
     undefined,

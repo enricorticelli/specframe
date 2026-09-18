@@ -18,10 +18,10 @@ function entryFor(plan, relpath) {
 test('plan includes core scaffolding as user-owned with variables rendered', async () => {
   const plan = await buildTemplatePlan(baseOpts);
 
-  const agents = entryFor(plan, 'AGENTS.md');
-  assert.ok(agents, 'AGENTS.md should be in the plan');
-  assert.equal(agents.managed, false);
-  assert.ok(!agents.content.includes('{{projectName}}'), 'variables must be rendered');
+  const readme = entryFor(plan, 'docs/README.md');
+  assert.ok(readme, 'docs/README.md should be in the plan');
+  assert.equal(readme.managed, false);
+  assert.ok(!readme.content.includes('{{projectName}}'), 'variables must be rendered');
 });
 
 test('plan includes docs scaffolding as user-owned', async () => {
@@ -260,7 +260,7 @@ test('no planned file ships an unsubstituted placeholder', async () => {
     const plan = await buildTemplatePlan({
       ...baseOpts,
       mode,
-      agentTargets: ['claude', 'copilot', 'codex', 'gemini', 'continue', 'amazonq'],
+      agentTargets: ['claude', 'copilot', 'codex'],
       decisions: (await import('../src/decisions/presets.js')).resolvePreset('strict').answers,
     });
 
@@ -293,10 +293,10 @@ test('rendering is deterministic for the same answers', async () => {
 });
 
 test('no target plans two entries for the same path', async () => {
-  // Codex renders a command and a skill of the same name to one path (it has no
-  // project-level prompts). Two entries for one path make every update
+  // Codex and Copilot each render a command and a skill of the same name to one
+  // path — neither has a second slot. Two entries for one path make every update
   // overwrite the previous run's output with the other rendering, forever.
-  for (const target of ['claude', 'copilot', 'codex', 'gemini', 'continue', 'amazonq']) {
+  for (const target of ['claude', 'copilot', 'codex']) {
     const plan = await buildTemplatePlan({ ...baseOpts, agentTargets: [target] });
     const seen = new Set();
     for (const entry of plan) {

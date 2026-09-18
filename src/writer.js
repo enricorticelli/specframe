@@ -104,25 +104,12 @@ function actionTag(label, { dryRun = false } = {}) {
   return prefix + pad(tone(`[${label}]`), 11);
 }
 
-// AGENTS.md is the one root file that carries a generated section. The ADR gate
-// has to reach repositories scaffolded before it existed, and AGENTS.md is
-// user-owned: without this, `update` reports `[keep] your file` and the file
-// every agent reads first keeps the version of the instruction that had no
-// threshold at all. `## When something new emerges` is listed with it because
-// mergeGeneratedSections needs an anchor that already exists on disk to insert
-// a brand-new heading after — see its doc comment in update.js. That makes the
-// routing list specframe's to rewrite, which is the point: it is the list that
-// was wrong. Not `regenerable` — the gate is static, so `update` is the only
-// thing that needs to carry it, not every `decide` and `revise`.
-const AGENTS_SECTIONS = ['## When something new emerges', '## The ADR gate'];
-
+// The only root file specframe still writes. Agent context is not scaffolded as
+// a file any more — no AGENTS.md, no CLAUDE.md, no per-tool pointer: `docs/` is
+// the source of truth and the commands and skills under AGENT_TEMPLATES are how
+// an agent reaches it. A pointer file is a copy that goes stale; a command reads
+// the log at the moment it runs.
 const TEMPLATE_TARGETS = [
-  { template: 'AGENTS.md.tpl', target: 'AGENTS.md', generated: AGENTS_SECTIONS },
-  { template: 'CLAUDE.md.tpl', target: 'CLAUDE.md' },
-  {
-    template: 'copilot-instructions.md.tpl',
-    target: '.github/copilot-instructions.md',
-  },
   { template: 'pr-template.md.tpl', target: '.github/pull_request_template.md' },
 ];
 
@@ -138,9 +125,8 @@ const TEMPLATE_TARGETS = [
 // land without touching it.
 const INDEX_SECTION = ['## Index'];
 // `## When to write one` is the canonical long form of the ADR gate, and it is
-// listed here for the same reason AGENTS.md carries one: it has to reach repos
-// scaffolded before the gate was tightened. Unlike AGENTS.md's new heading it
-// needs no anchor — every adr/README.md ever written already has it — but the
+// listed here because it has to reach repos scaffolded before the gate was
+// tightened. It needs no anchor — every adr/README.md ever written already has it — but the
 // order here must stay document order, ahead of the two indexes.
 const ADR_README_SECTIONS = ['## When to write one', '## Index', '## Decisions outside the catalog'];
 // The third heading is new as of the `dismissed` state and absent from every
@@ -207,11 +193,18 @@ const AGENT_ADAPTERS = {
   },
   copilot: {
     agentPath: (name) => `.github/agents/${name}.agent.md`,
+    // Copilot has no skills; a prompt is the closest thing it has, and the
+    // same path as its commands on purpose. A workflow shipped as both — and
+    // every skill-only workflow, which would otherwise not reach Copilot at
+    // all — lands there once, the skill winning the collision, exactly as on
+    // Codex. See buildAgentEntries.
     commandPath: (name) => `.github/prompts/${name}.prompt.md`,
-    skillPath: null,
+    skillPath: (name) => `.github/prompts/${name}.prompt.md`,
     renderAgent: ({ description, body }) =>
       `---\ndescription: ${description}\n---\n\n${body}`,
     renderCommand: ({ description, body }) =>
+      `---\nagent: agent\ndescription: ${description}\n---\n\n${body}`,
+    renderSkill: ({ description, body }) =>
       `---\nagent: agent\ndescription: ${description}\n---\n\n${body}`,
   },
   codex: {
@@ -228,36 +221,6 @@ const AGENT_ADAPTERS = {
       `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`,
     renderSkill: ({ name, description, body }) =>
       `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}`,
-  },
-};
-
-// Rules adapters cover agents that read a single native rules/instructions file
-// rather than the subagent/command/skill triad. Each renders one thin pointer
-// back to AGENTS.md + docs/ from a shared body.
-// - managed:false → the tool's primary context file the user is expected to own
-//   and extend (like CLAUDE.md). Never overwritten on update.
-// - managed:true  → a specframe-namespaced rule inside the tool's rules dir,
-//   refreshed on update (with the usual .specframe-new safety net).
-const RULES_ADAPTERS = {
-  gemini: {
-    path: 'GEMINI.md',
-    managed: false,
-    render: ({ body }) => body,
-  },
-  continue: {
-    path: '.continue/rules/specframe.md',
-    managed: true,
-    render: ({ body }) =>
-      '---\n' +
-      'name: specframe context\n' +
-      'description: Canonical AI-agent context for this repository.\n' +
-      'alwaysApply: true\n' +
-      `---\n\n${body}`,
-  },
-  amazonq: {
-    path: '.amazonq/rules/specframe.md',
-    managed: true,
-    render: ({ body }) => body,
   },
 };
 
@@ -332,12 +295,10 @@ async function writeIfMissing(targetPath, content, targetDir, { overwrite = fals
   return { written: true, existed: alreadyThere };
 }
 
-// Root-level files init would create — AGENTS.md, CLAUDE.md, the two .github
-// templates — that are already on disk in a repo specframe has never scaffolded.
-// Most often a legacy project with its own AI-agent context file: `init` never
-// overwrites a file it did not create, so left unquestioned these would just be
-// skipped, leaving specframe's pointers unreachable from whichever file an agent
-// actually reads. Checked up front so the CLI can ask instead of skipping quietly.
+// Root-level files init would create that are already on disk in a repo
+// specframe has never scaffolded. `init` never overwrites a file it did not
+// create, so left unquestioned these would just be skipped — checked up front
+// so the CLI can ask instead of skipping quietly.
 export async function findExistingRootFiles(targetDir) {
   const found = [];
   for (const { target } of TEMPLATE_TARGETS) {
@@ -369,7 +330,8 @@ async function buildAgentEntries({ targets, vars }) {
 
     // A workflow shipped as both a command and a skill (specframe-decide,
     // specframe-conform) is two files on Claude and one on Codex, whose
-    // commandPath *is* its skillPath — Codex has no project-level prompts. Two
+    // commandPath *is* its skillPath — neither Codex nor Copilot has a second
+    // slot to put it in. Two
     // plan entries for one path is not a harmless duplicate: each `update`
     // would find the other's content on disk, call it untouched-since-write,
     // and overwrite it, so the file flip-flops on every run. The skill wins,
@@ -412,29 +374,6 @@ async function buildAgentEntries({ targets, vars }) {
         });
       }
     }
-  }
-
-  return entries;
-}
-
-async function buildRulesEntries({ targets, vars }) {
-  const entries = [];
-  let body;
-
-  for (const target of targets) {
-    const adapter = RULES_ADAPTERS[target];
-    if (!adapter) continue;
-
-    if (body === undefined) {
-      const bodyPath = path.join(templateDir, 'rules-src', 'specframe-rules.body.md.tpl');
-      body = renderTemplate(await readFile(bodyPath, 'utf8'), vars);
-    }
-
-    entries.push({
-      relpath: adapter.path,
-      content: adapter.render({ body }),
-      managed: adapter.managed,
-    });
   }
 
   return entries;
@@ -595,7 +534,6 @@ export async function buildTemplatePlan(rawConfig = {}) {
 
   if (agentTargets.length > 0) {
     plan.push(...(await buildAgentEntries({ targets: agentTargets, vars })));
-    plan.push(...(await buildRulesEntries({ targets: agentTargets, vars })));
   }
 
   return plan;
@@ -613,8 +551,8 @@ export async function writeTemplateSet(rawConfig) {
   const previous = await readManifest(targetDir);
 
   // A file already on disk is left alone unless its relpath is in `overwrite`
-  // (the CLI asked, up front, whether to replace a pre-existing AGENTS.md/
-  // CLAUDE.md/etc.). Left alone, it is reported as `skip-user`: the manifest
+  // (the CLI asked, up front, whether to replace a pre-existing one of its root
+  // files). Left alone, it is reported as `skip-user`: the manifest
   // must not claim specframe wrote whatever is in it.
   const actions = [];
   for (const entry of plan) {
@@ -1130,7 +1068,7 @@ async function pruneEmptyDirs(startDir, rootDir) {
  * Deliberately narrower than `update`: the only files in scope are the ones the
  * newly added targets contribute (`.claude/**`, `GEMINI.md`, …), computed as the
  * difference between the plan for the merged target list and the plan for the
- * one already recorded. Everything else — docs, ADRs, AGENTS.md — is left
+ * one already recorded. Everything else — docs, ADRs — is left
  * exactly as it stands, so adding a second harness can never rewrite prose
  * written for the first.
  *
@@ -1178,13 +1116,12 @@ export async function addAgentTargets(rawConfig) {
  *
  * The mirror of addAgentTargets, and narrow in the same way: the files in scope
  * are exactly the ones the dropped targets contributed, computed as the
- * difference between the plan before and the plan after. AGENTS.md and docs/
- * are untouched, so the repository keeps its whole decision log — it just stops
+ * difference between the plan before and the plan after. docs/ is untouched, so the repository keeps its whole decision log — it just stops
  * shipping that tool's native files. Removing the last one is a supported
- * position: AGENTS.md alone covers most tools.
+ * position: docs/ is the log and reads the same without a harness.
  *
  * @param {string[]} previousTargets  the targets recorded in the manifest.
- * @param {boolean} purge  also remove the harness's user-owned file (GEMINI.md).
+ * @param {boolean} purge  also remove a file the manifest records as the user's.
  * @param {boolean} force  also remove a managed file that was edited by hand.
  */
 export async function removeAgentTargets(rawConfig) {

@@ -174,14 +174,3 @@ test('the audit skill ships to every harness that takes skills, and carries the 
   }
 });
 
-test('CLAUDE.md lists the audit command and skill it actually ships', async () => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'sf-audit-claude-'));
-  try {
-    await writeTemplateSet({ targetDir: dir, ...BASE, agentTargets: ['claude'], version: '0.8.0' });
-    const claude = await readFile(abs(dir, 'CLAUDE.md'), 'utf8');
-    assert.match(claude, /\/specframe-audit/);
-    assert.match(claude, /specframe-doc-sync, specframe-audit/);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});

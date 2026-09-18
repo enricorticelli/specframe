@@ -15,6 +15,10 @@ const CONFIG = {
   agentTargets: [],
 };
 
+// The one root-level file specframe still writes, and so the only one the
+// legacy-overwrite question can ever be about.
+const PR_TEMPLATE = path.join('.github', 'pull_request_template.md');
+
 async function makeEmptyRepo() {
   return mkdtemp(path.join(os.tmpdir(), 'specframe-legacy-'));
 }
@@ -26,62 +30,71 @@ test('findExistingRootFiles reports nothing in an empty repo', async () => {
   assert.deepEqual(await findExistingRootFiles(dir), []);
 });
 
-test('findExistingRootFiles finds a legacy AGENTS.md and CLAUDE.md', async () => {
+test('findExistingRootFiles finds a legacy root file specframe would write', async () => {
+  const dir = await makeEmptyRepo();
+  await mkdir(path.join(dir, '.github'), { recursive: true });
+  await writeFile(path.join(dir, '.github', 'pull_request_template.md'), 'legacy\n', 'utf8');
+
+  assert.deepEqual(await findExistingRootFiles(dir), ['.github/pull_request_template.md']);
+});
+
+test('a file specframe never writes is not reported, however agent-shaped', async () => {
+  // specframe stopped scaffolding context files; a repository's own AGENTS.md or
+  // CLAUDE.md is nothing to do with it and must not be offered for overwriting.
   const dir = await makeEmptyRepo();
   await writeFile(path.join(dir, 'AGENTS.md'), '# my own agents file\n', 'utf8');
   await writeFile(path.join(dir, 'CLAUDE.md'), '# my own claude file\n', 'utf8');
 
-  const found = await findExistingRootFiles(dir);
-  assert.ok(found.includes('AGENTS.md'));
-  assert.ok(found.includes('CLAUDE.md'));
-  assert.equal(found.length, 2);
-});
-
-test('findExistingRootFiles finds a legacy .github template too', async () => {
-  const dir = await makeEmptyRepo();
-  await mkdir(path.join(dir, '.github'), { recursive: true });
-  await writeFile(path.join(dir, '.github', 'copilot-instructions.md'), 'legacy\n', 'utf8');
-
-  assert.deepEqual(await findExistingRootFiles(dir), ['.github/copilot-instructions.md']);
+  assert.deepEqual(await findExistingRootFiles(dir), []);
 });
 
 // --- writeTemplateSet + overwrite --------------------------------------------
 
 test('writeTemplateSet keeps a pre-existing legacy file by default', async () => {
   const dir = await makeEmptyRepo();
-  await writeFile(path.join(dir, 'CLAUDE.md'), 'legacy content\n', 'utf8');
+  await mkdir(path.join(dir, '.github'), { recursive: true });
+  await writeFile(path.join(dir, PR_TEMPLATE), 'legacy content\n', 'utf8');
 
   await writeTemplateSet({ targetDir: dir, ...CONFIG, version: '0.1.0' });
 
-  assert.equal(await readFile(path.join(dir, 'CLAUDE.md'), 'utf8'), 'legacy content\n');
+  assert.equal(await readFile(path.join(dir, PR_TEMPLATE), 'utf8'), 'legacy content\n');
 
   const manifest = await readManifest(dir);
-  assert.equal(manifest.files['CLAUDE.md'].sha256, undefined, 'no hash recorded for a file specframe did not write');
+  assert.equal(
+    manifest.files['.github/pull_request_template.md'].sha256,
+    undefined,
+    'no hash recorded for a file specframe did not write',
+  );
 });
 
 test('writeTemplateSet overwrites a pre-existing legacy file named in `overwrite`', async () => {
   const dir = await makeEmptyRepo();
-  await writeFile(path.join(dir, 'CLAUDE.md'), 'legacy content\n', 'utf8');
-  await writeFile(path.join(dir, 'AGENTS.md'), 'legacy agents\n', 'utf8');
+  await mkdir(path.join(dir, '.github'), { recursive: true });
+  await writeFile(path.join(dir, PR_TEMPLATE), 'legacy content\n', 'utf8');
+  await writeFile(path.join(dir, 'docs-own.md'), 'mine\n', 'utf8');
 
   await writeTemplateSet({
     targetDir: dir,
     ...CONFIG,
     version: '0.1.0',
-    overwrite: new Set(['CLAUDE.md']),
+    overwrite: new Set(['.github/pull_request_template.md']),
   });
 
-  const claude = await readFile(path.join(dir, 'CLAUDE.md'), 'utf8');
-  assert.notEqual(claude, 'legacy content\n', 'CLAUDE.md should be replaced with the template');
-  assert.equal(await readFile(path.join(dir, 'AGENTS.md'), 'utf8'), 'legacy agents\n', 'AGENTS.md was not named — left alone');
+  const written = await readFile(path.join(dir, PR_TEMPLATE), 'utf8');
+  assert.notEqual(written, 'legacy content\n', 'it should be replaced with the template');
+  assert.equal(await readFile(path.join(dir, 'docs-own.md'), 'utf8'), 'mine\n', 'a file outside the plan is untouched');
 
   const manifest = await readManifest(dir);
-  assert.ok(manifest.files['CLAUDE.md'].sha256, 'the new content is now tracked by the manifest');
-  assert.equal(manifest.files['AGENTS.md'].sha256, undefined);
+  assert.ok(manifest.files['.github/pull_request_template.md'].sha256, 'the new content is now tracked by the manifest');
 });
 
 test('a missing file is created whether or not it is named in `overwrite`', async () => {
   const dir = await makeEmptyRepo();
-  await writeTemplateSet({ targetDir: dir, ...CONFIG, version: '0.1.0', overwrite: new Set(['CLAUDE.md']) });
-  assert.ok((await readFile(path.join(dir, 'CLAUDE.md'), 'utf8')).length > 0);
+  await writeTemplateSet({
+    targetDir: dir,
+    ...CONFIG,
+    version: '0.1.0',
+    overwrite: new Set(['.github/pull_request_template.md']),
+  });
+  assert.ok((await readFile(path.join(dir, PR_TEMPLATE), 'utf8')).length > 0);
 });

@@ -209,7 +209,7 @@ Init options:
                       their recommended option.
       --name NAME     Project name (default: directory name).
       --pm NAME       npm | pnpm (default: npm).
-      --agents LIST   claude,copilot,codex,gemini,continue,amazonq | none
+      --agents LIST   claude,copilot,codex | none
       --detected      These decisions are already implemented in this codebase.
                       Their ADRs say so, and ask for the evidence in the code
                       instead of presenting the choice as new. Use this when
@@ -217,8 +217,8 @@ Init options:
                       does it for you.
   -f, --force         If specframe is already installed here, re-run onboarding
                       from scratch instead of pointing at update/decide. Also
-                      answers yes to overwriting AGENTS.md/CLAUDE.md/etc. that
-                      already exist from outside specframe, unattended.
+                      answers yes to overwriting root files that already exist
+                      from outside specframe, unattended.
 
 Decide options:
   -n, --dry-run    Show what would be written.
@@ -280,24 +280,25 @@ Restore options ('restore <id>[,<id>...]'):
 Agents subcommands (each takes '<id>[,<id>...]', or no argument on a terminal
 to pick from a list):
   agents                     What is configured here, and what can be added.
-  agents add codex,gemini    Write those harnesses' native files.
+  agents add codex,copilot   Write those harnesses' native files.
   agents remove codex        Drop a harness's files. --all drops every one.
-  agents set claude,gemini   Make it exactly this list — adds and removes as
+  agents set claude,codex    Make it exactly this list — adds and removes as
                              needed. 'set none' leaves the repo with none.
 
 Agents options:
-      --agents LIST  Same list, as a flag: \`agents add --agents codex,gemini\`.
+      --agents LIST  Same list, as a flag: \`agents add --agents codex,copilot\`.
       --all          On remove: every harness configured here.
   -n, --dry-run      Show what would happen, without touching anything.
   -f, --force        On add: rewrite one of this harness's files if you edited
                      it. On remove: delete one you edited (kept by default).
-      --purge        On remove: also delete the harness's user-owned file
-                     (GEMINI.md), which is otherwise kept as yours.
+      --purge        On remove: also delete a file the manifest records as
+                     yours. Only repositories scaffolded before specframe
+                     stopped writing per-tool context files have one.
       --json         Print { added | removed, agentTargets, files } instead of
                      messages.
-Nothing outside the harness's own files — no doc, no ADR, not AGENTS.md — is
-ever touched, so a repository with no harness at all is a supported position:
-AGENTS.md is generated regardless and covers most tools. Adding leaves
+Nothing outside the harness's own files — no doc, no ADR — is ever touched, so
+a repository with no harness at all is a supported position: docs/ is the log,
+and it reads the same to a human. Adding leaves
 harnesses already configured alone (\`specframe update\` refreshes their files);
 removing deletes only what specframe wrote and you never edited.
 
@@ -306,8 +307,8 @@ Update options:
   -n, --dry-run    Show what would change without writing anything.
 
 Uninstall options:
-      --purge      Remove every user-owned starter (AGENTS.md, CLAUDE.md,
-                   GEMINI.md, copilot-instructions.md, docs/**, …) too, with
+      --purge      Remove every user-owned starter (docs/**, the PR template,
+                   …) too, with
                    no prompt. Without it, on a terminal, you are asked which
                    of those (if any) to remove along with the managed files.
   -n, --dry-run    Show what would be removed.
@@ -323,7 +324,7 @@ ${PRESET_IDS.map((id) => `  ${id.padEnd(9)} ${PRESETS[id].description}`).join('\
 Blueprints — the shape of the system:
 ${BLUEPRINTS.map(describeBlueprint).join('\n')}
 
-On update, files you own (docs, ADRs, CLAUDE.md, …) are never overwritten.
+On update, files you own (docs, ADRs, …) are never overwritten.
 A managed file you edited by hand is kept; the new version lands beside it as
 <file>.specframe-new for you to merge. The one part of a document specframe
 keeps writing is the generated section of an index (the \`## Index\` table, and
@@ -460,8 +461,8 @@ async function runInstalledMenu(cwd, version, flags, manifest) {
   console.log(
     theme.muted(
       flags.purge
-        ? '\n--purge: your docs, ADRs and CLAUDE.md go too.'
-        : '\nManaged files are removed; docs/, ADRs, AGENTS.md and CLAUDE.md are kept by ' +
+        ? '\n--purge: your docs and ADRs go too.'
+        : '\nManaged files are removed; docs/ and ADRs are kept by ' +
             'default — the next screen offers to keep, remove or pick among them.',
     ),
   );
@@ -516,14 +517,14 @@ export function buildInstalledMenu({ manifest, version }) {
     options.push({
       value: 'agents',
       label: `Add an AI assistant (${addableAgents.length} available)`,
-      hint: `Native files for ${addableAgents.join(', ')}, pointing at the AGENTS.md and docs/ already here.`,
+      hint: `Native files for ${addableAgents.join(', ')}, wired to the docs/ already here.`,
     });
   }
   if (stored.agentTargets.length > 0) {
     options.push({
       value: 'agents-remove',
       label: `Remove an AI assistant (${stored.agentTargets.join(', ')})`,
-      hint: 'Drops that tool\'s native files. AGENTS.md, docs/ and the decision log stay as they are — a repo with no harness is a supported position.',
+      hint: 'Drops that tool\'s native files. docs/ and the decision log stay as they are — a repo with no harness is a supported position.',
     });
   }
   options.push({
@@ -534,7 +535,7 @@ export function buildInstalledMenu({ manifest, version }) {
   options.push({
     value: 'uninstall',
     label: 'Remove what specframe created',
-    hint: 'Managed files by default; you are asked which user-owned files (AGENTS.md, CLAUDE.md, docs/, …) to remove too.',
+    hint: 'Managed files by default; you are asked which user-owned files (docs/, …) to remove too.',
   });
 
   const preamble = [
@@ -547,11 +548,10 @@ export function buildInstalledMenu({ manifest, version }) {
   return { options, preamble };
 }
 
-// AGENTS.md/CLAUDE.md/etc. that already exist here, from outside specframe —
-// most often a legacy project with its own AI-agent context files. `init` never
+// Root files that already exist here, from outside specframe. `init` never
 // overwrites a file it did not create, so left unquestioned these are silently
-// skipped and specframe's pointers (docs/, ADRs, rules) end up unreachable from
-// whichever file an agent actually reads. Ask once, before the wizard runs,
+// skipped and whatever specframe would have put there never lands. Ask once,
+// before the wizard runs,
 // rather than let that go by as a quiet `[skip]` line mid-run.
 async function confirmLegacyOverwrite({ targetDir, flags, unattended }) {
   const found = await findExistingRootFiles(targetDir);
@@ -1474,7 +1474,7 @@ async function runAgentsAdd({ targetDir, version, flags, stored, configured, ava
   if (requested === null) {
     if (flags.yes || !process.stdin.isTTY) {
       throw new Error(
-        'Which agent harness? Name one or more, e.g. `specframe agents add codex,gemini`.\n' +
+        'Which agent harness? Name one or more, e.g. `specframe agents add codex,copilot`.\n' +
           `Still available here: ${available.join(', ')}.`,
       );
     }
@@ -1544,7 +1544,7 @@ async function runAgentsAdd({ targetDir, version, flags, stored, configured, ava
 
 // Drop a harness. Nothing about the decision log changes — this is the tool's
 // own files and nothing else — so removing the last one is a position, not a
-// half-uninstall: AGENTS.md is generated regardless and covers most tools.
+// half-uninstall: docs/ is the log and stands on its own.
 async function runAgentsRemove({ targetDir, version, flags, stored, configured }, rawList) {
   let requested = flags.all ? [...configured] : parseAgentList(rawList);
 
@@ -1631,13 +1631,13 @@ async function runAgentsRemove({ targetDir, version, flags, stored, configured }
     `\n${theme.good('Done.')} ` +
       (agentTargets.length > 0
         ? `${agentTargets.join(', ')} ${agentTargets.length === 1 ? 'still reads' : 'still read'} this repository's context.`
-        : 'No harness-specific files here now; AGENTS.md and docs/ are untouched and still cover most tools.'),
+        : 'No harness-specific files here now; docs/ is untouched and still the log.'),
   );
 }
 
 // The declarative form: name the harnesses this repository should have, and
 // whatever that implies happens. `set none` leaves it with none. It exists
-// because the two-step ("stop shipping codex, start shipping gemini") is the
+// because the two-step ("stop shipping codex, start shipping copilot") is the
 // shape of the actual intent, and doing it as add-then-remove by hand means a
 // window where the repo has both, or neither.
 async function runAgentsSet(context, rawList) {
@@ -1646,7 +1646,7 @@ async function runAgentsSet(context, rawList) {
   if (requested === null) {
     throw new Error(
       'Which agent harnesses should this repository have?\n' +
-        'Name them all — `specframe agents set claude,gemini` — or `set none` for none.\n' +
+        'Name them all — `specframe agents set claude,codex` — or `set none` for none.\n' +
         `Configured here: ${configured.length > 0 ? configured.join(', ') : 'none'}.`,
     );
   }
@@ -1690,7 +1690,7 @@ function reportAgentTargets({ configured, available }) {
 
   if (configured.length === 0) {
     console.log(theme.warn('No agent harness is configured in this repository.'));
-    console.log(theme.muted('AGENTS.md is generated regardless; these add each tool\'s native files on top.'));
+    console.log(theme.muted('Each one adds that tool\'s subagents, commands and skills, wired to docs/.'));
   } else {
     console.log(theme.bold('Configured here:'));
     for (const value of configured) console.log(label(value));
@@ -1777,8 +1777,7 @@ async function runUninstall(cwd, flags) {
 
   // `--purge` already says "everything"; off a terminal or with `-y` there is
   // nobody to ask. Otherwise, rather than the all-or-nothing flag, offer the
-  // user-owned files (AGENTS.md, CLAUDE.md, GEMINI.md, copilot-instructions.md,
-  // docs/, …) one at a time.
+  // user-owned files (docs/, the PR template, …) one at a time.
   let purgePaths;
   if (!flags.purge && !flags.yes && process.stdin.isTTY) {
     const kept = await previewUninstallKept({ targetDir });

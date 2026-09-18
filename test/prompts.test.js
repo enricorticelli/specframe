@@ -54,7 +54,7 @@ test('picking no agent assistant twice, then confirming, proceeds with none', as
 });
 
 test('parseAgentTargets accepts the known targets and drops the rest', () => {
-  assert.deepEqual(parseAgentTargets('claude, gemini, bogus'), ['claude', 'gemini']);
+  assert.deepEqual(parseAgentTargets('claude, codex, bogus'), ['claude', 'codex']);
   assert.deepEqual(parseAgentTargets('none'), []);
   assert.deepEqual(parseAgentTargets(undefined), []);
 });

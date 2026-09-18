@@ -36,23 +36,22 @@ async function makeRepo(agentTargets = CONFIG.agentTargets) {
 test('adding a harness writes only its own files', async () => {
   const dir = await makeRepo();
   try {
-    const before = await readFile(abs(dir, 'AGENTS.md'), 'utf8');
+    const before = await readFile(abs(dir, 'docs/DECISIONS.md'), 'utf8');
     const actions = await addAgentTargets({
       targetDir: dir,
       ...CONFIG,
-      agentTargets: ['claude', 'gemini'],
+      agentTargets: ['claude', 'codex'],
       previousTargets: ['claude'],
       version: '0.1.0',
       quiet: true,
     });
 
-    assert.ok(await exists(abs(dir, 'GEMINI.md')), 'the new harness got its file');
-    assert.deepEqual(
-      actions.map((a) => a.relpath),
-      ['GEMINI.md'],
+    assert.ok(await exists(abs(dir, '.codex/agents/bootstrapper.toml')), 'the new harness got its files');
+    assert.ok(
+      actions.every((a) => a.relpath.startsWith('.codex/') || a.relpath.startsWith('.agents/')),
       'nothing outside the new harness was planned',
     );
-    assert.equal(await readFile(abs(dir, 'AGENTS.md'), 'utf8'), before, 'AGENTS.md untouched');
+    assert.equal(await readFile(abs(dir, 'docs/DECISIONS.md'), 'utf8'), before, 'the decision log is untouched');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -64,17 +63,15 @@ test('the manifest records the merged target list and the new files', async () =
     await addAgentTargets({
       targetDir: dir,
       ...CONFIG,
-      agentTargets: ['claude', 'gemini'],
+      agentTargets: ['claude', 'codex'],
       previousTargets: ['claude'],
       version: '0.1.0',
       quiet: true,
     });
 
     const manifest = await readManifest(dir);
-    assert.deepEqual(manifest.config.agentTargets, ['claude', 'gemini']);
-    // GEMINI.md is a user-owned pointer, like the other rules files — what
-    // matters here is that it is tracked at all.
-    assert.ok(manifest.files['GEMINI.md'], 'the new file is tracked');
+    assert.deepEqual(manifest.config.agentTargets, ['claude', 'codex']);
+    assert.ok(manifest.files['.codex/agents/bootstrapper.toml'], 'the new file is tracked');
     // Everything init wrote is still tracked — the merge must not drop the
     // rest of the manifest, or `update` would treat those files as unknown.
     assert.ok(manifest.files['.claude/agents/bootstrapper.md'], 'claude files kept');
@@ -136,14 +133,14 @@ test('dry run writes nothing at all', async () => {
     await addAgentTargets({
       targetDir: dir,
       ...CONFIG,
-      agentTargets: ['claude', 'gemini'],
+      agentTargets: ['claude', 'codex'],
       previousTargets: ['claude'],
       version: '0.1.0',
       dryRun: true,
       quiet: true,
     });
 
-    assert.equal(await exists(abs(dir, 'GEMINI.md')), false);
+    assert.equal(await exists(abs(dir, '.codex/agents/bootstrapper.toml')), false);
     const manifest = await readManifest(dir);
     assert.deepEqual(manifest.config.agentTargets, ['claude']);
   } finally {
@@ -152,8 +149,8 @@ test('dry run writes nothing at all', async () => {
 });
 
 test('splitAgentTargets separates known ids from typos', () => {
-  assert.deepEqual(splitAgentTargets('codex, Gemini,codexx'), {
-    valid: ['codex', 'gemini'],
+  assert.deepEqual(splitAgentTargets('codex, Copilot,codexx'), {
+    valid: ['codex', 'copilot'],
     unknown: ['codexx'],
   });
   assert.deepEqual(splitAgentTargets('claude,claude'), { valid: ['claude'], unknown: [] });
@@ -166,7 +163,7 @@ test('splitAgentTargets separates known ids from typos', () => {
 test('removing a harness deletes its files and nothing else', async () => {
   const dir = await makeRepo(['claude', 'codex']);
   try {
-    const before = await readFile(abs(dir, 'AGENTS.md'), 'utf8');
+    const before = await readFile(abs(dir, 'docs/DECISIONS.md'), 'utf8');
     const actions = await removeAgentTargets({
       targetDir: dir,
       ...CONFIG,
@@ -181,8 +178,7 @@ test('removing a harness deletes its files and nothing else', async () => {
     assert.equal(await exists(abs(dir, '.codex/agents/bootstrapper.toml')), false);
     assert.equal(await exists(abs(dir, '.codex')), false, 'the empty directory is pruned too');
     assert.ok(await exists(abs(dir, '.claude/agents/bootstrapper.md')), 'the kept harness is intact');
-    assert.equal(await readFile(abs(dir, 'AGENTS.md'), 'utf8'), before, 'AGENTS.md untouched');
-    assert.ok(await exists(abs(dir, 'docs/DECISIONS.md')), 'the decision log is untouched');
+    assert.equal(await readFile(abs(dir, 'docs/DECISIONS.md'), 'utf8'), before, 'the decision log is untouched');
 
     const manifest = await readManifest(dir);
     assert.deepEqual(manifest.config.agentTargets, ['claude']);
@@ -205,7 +201,7 @@ test('removing the last harness is a supported position', async () => {
     });
 
     assert.equal(await exists(abs(dir, '.claude')), false);
-    assert.ok(await exists(abs(dir, 'AGENTS.md')), 'AGENTS.md still covers most tools');
+    assert.ok(await exists(abs(dir, 'docs/adr/README.md')), 'the decision log stands on its own');
     const manifest = await readManifest(dir);
     assert.deepEqual(manifest.config.agentTargets, []);
   } finally {
@@ -258,29 +254,6 @@ test('--force removes a file you edited, and says that is why', async () => {
     assert.equal(await exists(abs(dir, rel)), false);
   } finally {
     await rm(dir, { recursive: true, force: true });
-  }
-});
-
-test('a user-owned file is kept unless purged', async () => {
-  for (const purge of [false, true]) {
-    const dir = await makeRepo(['gemini']);
-    try {
-      const actions = await removeAgentTargets({
-        targetDir: dir,
-        ...CONFIG,
-        agentTargets: [],
-        previousTargets: ['gemini'],
-        version: '0.1.0',
-        purge,
-        quiet: true,
-      });
-
-      const action = actions.find((a) => a.relpath === 'GEMINI.md');
-      assert.equal(action.action, purge ? 'orphan-remove' : 'skip-user');
-      assert.equal(await exists(abs(dir, 'GEMINI.md')), !purge);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
   }
 });
 
