@@ -11,6 +11,7 @@ import {
   readAnswersFile,
   validateAnswers,
 } from '../src/answers.js';
+import { writeTemplateSet } from '../src/writer.js';
 import { DECISIONS, isRelevant } from '../src/decisions/catalog.js';
 import { PRESET_IDS, PRESETS, resolvePreset } from '../src/decisions/presets.js';
 
@@ -66,6 +67,34 @@ test('an answers file accepts both the bare map and a manifest config', async ()
       mode: 'guided',
       answers: { tdd: 'pragmatic' },
     });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('an actual generated manifest replays its mode and decisions', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sf-answers-'));
+  try {
+    await writeTemplateSet({
+      targetDir: dir, version: '0.2.0', projectName: 'source', mode: 'guided',
+      decisions: { tdd: 'strict' }, agentTargets: [],
+    });
+    const source = await collectAnswerSources({ answersFile: path.join(dir, '.specframe/manifest.json') });
+    assert.deepEqual(source, { mode: 'guided', answers: { tdd: 'strict' } });
+    assert.deepEqual(validateAnswers(source.answers), { valid: { tdd: 'strict' }, invalid: [] });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('answers files reject arrays and malformed decision maps', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'sf-answers-'));
+  try {
+    const file = path.join(dir, 'answers.json');
+    for (const data of [[], null, { decisions: [] }, { config: { decisions: null } }]) {
+      await writeFile(file, JSON.stringify(data));
+      await assert.rejects(readAnswersFile(file), /must contain.*object/);
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
