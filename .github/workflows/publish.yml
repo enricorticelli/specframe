@@ -67,7 +67,10 @@ jobs:
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           git fetch origin main
-          git checkout -B main origin/main
+          # Keep the release checkout on its tag; sync main in a separate tree.
+          SYNC_DIR="$RUNNER_TEMP/specframe-release-main"
+          git worktree add --detach "$SYNC_DIR" origin/main
+          cd "$SYNC_DIR"
 
           CURRENT_MAIN_VERSION=$(node -p "require('./package.json').version")
           if [ "$CURRENT_MAIN_VERSION" = "$TAG_VERSION" ]; then
