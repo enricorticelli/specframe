@@ -1,6 +1,6 @@
 {
   "name": "specframe",
-  "version": "0.2.0",
+  "version": "0.10.1",
   "type": "module",
   "bin": {
     "specframe": "bin/specframe.js"
