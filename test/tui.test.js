@@ -11,7 +11,7 @@ import {
   parseReviewInput,
   parseTextInput,
 } from '../src/tui.js';
-import { plainTheme, stripAnsi } from '../src/style.js';
+import { createStyle, plainTheme, stripAnsi } from '../src/style.js';
 
 const q = (raw, opts = { optionCount: 4 }) => parseQuestionInput(raw, opts);
 
@@ -139,13 +139,15 @@ test('free text falls back to the default', () => {
 // --- formatting -------------------------------------------------------------
 
 test('the recommendation is marked, not pre-selected', () => {
-  const rendered = formatOptions([
-    { label: 'One', hint: 'first' },
-    { label: 'Two', recommended: true },
-  ]);
-  assert.match(rendered, /1\) One/);
-  assert.match(rendered, /first/);
-  assert.match(rendered, /2\) Two {2}★ recommended/);
+  for (const unicode of [true, false]) {
+    const rendered = formatOptions([
+      { label: 'One', hint: 'first' },
+      { label: 'Two', recommended: true },
+    ], { theme: createStyle({ color: false, unicode }), width: 80 });
+    assert.match(rendered, /1\) One/);
+    assert.match(rendered, /first/);
+    assert.ok(rendered.includes(`2) Two  ${unicode ? '★' : '*'} recommended`));
+  }
 });
 
 test('the answer already on record is marked as current', () => {
