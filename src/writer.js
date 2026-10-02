@@ -1,5 +1,6 @@
 import { access, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { safeRepoPath } from './paths.js';
 
 import { manifestFromActions, readManifest, writeManifest, MANIFEST_RELPATH } from './manifest.js';
 import { planAgentRemoval, planUpdateActions, planUninstallActions } from './update.js';
@@ -68,14 +69,9 @@ async function writeIfMissing(targetPath, content, targetDir, { overwrite = fals
 export async function findExistingRootFiles(targetDir) {
   const found = [];
   for (const { target } of TEMPLATE_TARGETS) {
-    if (await exists(toAbsPath(targetDir, target))) found.push(target);
+    if (await exists(await safeRepoPath(targetDir, target))) found.push(target);
   }
   return found;
-}
-
-// Absolute path for a forward-slash manifest-key relpath on the host OS.
-function toAbsPath(targetDir, relpath) {
-  return path.join(targetDir, ...relpath.split('/'));
 }
 
 export async function writeTemplateSet(rawConfig) {
@@ -83,6 +79,7 @@ export async function writeTemplateSet(rawConfig) {
   const config = normalizeConfig(rawConfig);
   const plan = await buildTemplatePlan(config);
   const previous = await readManifest(targetDir);
+  for (const entry of plan) await safeRepoPath(targetDir, entry.relpath);
 
   // A file already on disk is left alone unless its relpath is in `overwrite`
   // (the CLI asked, up front, whether to replace a pre-existing one of its root
@@ -90,7 +87,7 @@ export async function writeTemplateSet(rawConfig) {
   // must not claim specframe wrote whatever is in it.
   const actions = [];
   for (const entry of plan) {
-    const { written, existed } = await writeIfMissing(toAbsPath(targetDir, entry.relpath), entry.content, targetDir, {
+    const { written, existed } = await writeIfMissing(await safeRepoPath(targetDir, entry.relpath), entry.content, targetDir, {
       overwrite: overwrite.has(entry.relpath),
     });
     actions.push({
@@ -122,8 +119,9 @@ async function readDiskFiles(targetDir, plan, manifest) {
 
   const diskContents = {};
   for (const relpath of relpaths) {
+    const absPath = await safeRepoPath(targetDir, relpath);
     try {
-      diskContents[relpath] = await readFile(toAbsPath(targetDir, relpath), 'utf8');
+      diskContents[relpath] = await readFile(absPath, 'utf8');
     } catch {
       // not on disk — leave it out so it is treated as "create" (planned) or
       // as already gone (orphaned).
@@ -327,7 +325,7 @@ export async function recordLocalAdr({ targetDir, version, slug, title, date, dr
   const config = normalizeConfig(manifest.config);
   const number = await nextLocalAdrNumber(targetDir, config);
   const relpath = `docs/adr/${number}-${slug}.md`;
-  const absPath = toAbsPath(targetDir, relpath);
+  const absPath = await safeRepoPath(targetDir, relpath);
 
   // nextLocalAdrNumber always returns one past every number already on disk,
   // so this only ever fires on a genuine race — two `adr new` calls reading
@@ -385,7 +383,7 @@ export async function recordLocalDoc({ targetDir, version, section, slug, title,
   const config = normalizeConfig(manifest.config);
   const number = await nextLocalNumber(targetDir, meta.dir, config.localDocs[section]);
   const relpath = `${meta.dir}/${number}-${slug}.md`;
-  const absPath = toAbsPath(targetDir, relpath);
+  const absPath = await safeRepoPath(targetDir, relpath);
 
   // Only reachable on a genuine race between two `doc new` calls — see the
   // identical guard in recordLocalAdr.
@@ -460,7 +458,7 @@ export async function removeLocalAdr({ targetDir, version, number, date, dryRun 
   }
 
   const relpath = `docs/adr/${entry.number}-${entry.slug}.md`;
-  const absPath = toAbsPath(targetDir, relpath);
+  const absPath = await safeRepoPath(targetDir, relpath);
 
   const localAdrs = config.localAdrs.map((a) =>
     a === entry ? { ...a, removed: date ?? today() } : a,
@@ -512,16 +510,20 @@ async function refreshLocalIndex({
 
 async function applyActions({ targetDir, actions, dryRun, quiet = false }) {
   for (const action of actions) {
+    await safeRepoPath(targetDir, action.relpath);
+    if (action.action === 'conflict') await safeRepoPath(targetDir, `${action.relpath}.specframe-new`);
+  }
+  for (const action of actions) {
     const rel = action.relpath;
     if (!dryRun) {
       if (action.action === 'create' || action.action === 'overwrite' || action.action === 'merge') {
-        const absPath = toAbsPath(targetDir, rel);
+        const absPath = await safeRepoPath(targetDir, rel);
         await mkdir(path.dirname(absPath), { recursive: true });
         await writeFile(absPath, action.content, 'utf8');
       } else if (action.action === 'conflict') {
-        await writeFile(`${toAbsPath(targetDir, rel)}.specframe-new`, action.content, 'utf8');
+        await writeFile(await safeRepoPath(targetDir, `${rel}.specframe-new`), action.content, 'utf8');
       } else if (action.action === 'orphan-remove') {
-        const absPath = toAbsPath(targetDir, rel);
+        const absPath = await safeRepoPath(targetDir, rel);
         await rm(absPath, { force: true });
         await pruneEmptyDirs(path.dirname(absPath), targetDir);
       }
@@ -590,7 +592,7 @@ export async function uninstallTemplateSet({ targetDir, purge = false, purgePath
 
   for (const action of actions) {
     if (action.action === 'remove') {
-      const absPath = toAbsPath(targetDir, action.relpath);
+      const absPath = await safeRepoPath(targetDir, action.relpath);
       if (!dryRun) {
         await rm(absPath, { force: true });
         await pruneEmptyDirs(path.dirname(absPath), targetDir);
@@ -605,7 +607,7 @@ export async function uninstallTemplateSet({ targetDir, purge = false, purgePath
   }
 
   if (!dryRun) {
-    const manifestPath = path.join(targetDir, MANIFEST_RELPATH);
+    const manifestPath = await safeRepoPath(targetDir, MANIFEST_RELPATH);
     await rm(manifestPath, { force: true });
     await pruneEmptyDirs(path.dirname(manifestPath), targetDir);
     console.log(`${actionTag('remove')}${MANIFEST_RELPATH}`);
@@ -737,7 +739,7 @@ export async function removeAgentTargets(rawConfig) {
   if (!dryRun) {
     for (const action of actions) {
       if (action.action !== 'orphan-remove') continue;
-      const pending = `${toAbsPath(targetDir, action.relpath)}.specframe-new`;
+      const pending = await safeRepoPath(targetDir, `${action.relpath}.specframe-new`);
       if (!(await exists(pending))) continue;
       await rm(pending, { force: true });
       await pruneEmptyDirs(path.dirname(pending), targetDir);
