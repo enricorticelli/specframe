@@ -32,6 +32,9 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Run tests before release changes or publication
+        run: npm test
+
       # npm Trusted Publishing (tokenless via OIDC) requires a recent npm CLI:
       # the npm bundled with Node 22 signs provenance fine, but does NOT perform
       # the OIDC→npm-token exchange used to authenticate the actual publish PUT,
@@ -67,7 +70,10 @@ jobs:
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
           git fetch origin main
-          git checkout -B main origin/main
+          # Keep the release checkout on its tag; sync main in a separate tree.
+          SYNC_DIR="$RUNNER_TEMP/specframe-release-main"
+          git worktree add --detach "$SYNC_DIR" origin/main
+          cd "$SYNC_DIR"
 
           CURRENT_MAIN_VERSION=$(node -p "require('./package.json').version")
           if [ "$CURRENT_MAIN_VERSION" = "$TAG_VERSION" ]; then
@@ -99,6 +105,7 @@ jobs:
           fi
 
       - name: Publish package
+        id: publish
         if: steps.version_check.outputs.exists != 'true'
         run: npm publish --access public --provenance
 
@@ -107,6 +114,8 @@ jobs:
         run: |
           if [ "${{ steps.version_check.outputs.exists }}" = "true" ]; then
             echo "No publish performed: ${{ steps.version_check.outputs.package_name }}@${{ steps.version_check.outputs.package_version }} already exists."
-          else
+          elif [ "${{ steps.publish.outcome }}" = "success" ]; then
             echo "Publish completed for ${{ steps.version_check.outputs.package_name }}@${{ steps.version_check.outputs.package_version }}."
+          else
+            echo "Publish did not complete; check the failed or skipped steps above."
           fi

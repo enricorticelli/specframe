@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { safeRepoPath } from './paths.js';
 
 // Relative path of the manifest inside a scaffolded repository.
 export const MANIFEST_RELPATH = '.specframe/manifest.json';
@@ -17,17 +18,26 @@ export function toManifestKey(relpath) {
 }
 
 export async function readManifest(targetDir) {
-  const manifestPath = path.join(targetDir, MANIFEST_RELPATH);
+  const manifestPath = await safeRepoPath(targetDir, MANIFEST_RELPATH);
+  let manifest;
   try {
-    const raw = await readFile(manifestPath, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return null;
+    manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
+    throw error;
   }
+  // Validate every entry before a command can mutate any file.
+  for (const relpath of Object.keys(manifest?.files ?? {})) {
+    await safeRepoPath(targetDir, relpath);
+  }
+  return manifest;
 }
 
 export async function writeManifest(targetDir, manifest) {
-  const manifestPath = path.join(targetDir, MANIFEST_RELPATH);
+  const manifestPath = await safeRepoPath(targetDir, MANIFEST_RELPATH);
+  for (const relpath of Object.keys(manifest.files ?? {})) {
+    await safeRepoPath(targetDir, relpath);
+  }
   await mkdir(path.dirname(manifestPath), { recursive: true });
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }

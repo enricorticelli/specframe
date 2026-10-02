@@ -30,9 +30,7 @@ export function parseSetFlag(value) {
   return answers;
 }
 
-// An answers file is `{ "decision-id": "option-value" }`, optionally wrapped as
-// `{ "mode": "...", "decisions": { … } }` — which is exactly the shape the
-// manifest stores, so a manifest can be replayed into a new repository.
+// Accept a bare answer map, a config, or the full manifest written by init.
 export async function readAnswersFile(filePath) {
   let parsed;
   try {
@@ -41,13 +39,18 @@ export async function readAnswersFile(filePath) {
     throw new Error(`Could not read answers file ${filePath}: ${error.message}`);
   }
 
-  if (parsed && typeof parsed === 'object' && parsed.decisions && typeof parsed.decisions === 'object') {
-    return { mode: parsed.mode, answers: parsed.decisions };
+  const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isObject(parsed)) {
+    throw new Error(`Answers file ${filePath} must contain a JSON object.`);
   }
-  if (parsed && typeof parsed === 'object') {
-    return { mode: undefined, answers: parsed };
+  const config = isObject(parsed.config) ? parsed.config : parsed;
+  if (config.decisions !== undefined) {
+    if (!isObject(config.decisions)) {
+      throw new Error(`Answers file ${filePath} must contain a decisions object.`);
+    }
+    return { mode: config.mode, answers: config.decisions };
   }
-  throw new Error(`Answers file ${filePath} must contain a JSON object.`);
+  return { mode: undefined, answers: parsed };
 }
 
 // Split answers into the ones the catalog recognises and the ones it does not.
